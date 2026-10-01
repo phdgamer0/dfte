@@ -1,0 +1,7 @@
+/target
+*.a
+*.bin
+*.o
+*.py
+*.sh
+*.test

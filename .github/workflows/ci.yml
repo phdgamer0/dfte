@@ -39,7 +39,7 @@ jobs:
         run: |
           # Feature unification enables bench-insecure-plaintext in workspace
           # builds via crates/bench; app crates built on their own must not get it.
-          for c in dfte-core platform-ffi; do
+          for c in dfte-core platform-ffi dfte-cli; do
             tree=$(cargo tree -q -p "$c" -e features)
             if grep -q 'bench-insecure-plaintext' <<<"$tree"; then
               echo "::error::$c pulls in bench-insecure-plaintext"

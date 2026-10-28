@@ -1,0 +1,27 @@
+[package]
+name = "netem-harness"
+description = "netns + tc/netem loss/latency/reorder harness driving engine-bench (manual §31)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+# Criterion flags reach every bench target; the libtest harness rejects them.
+[lib]
+bench = false
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "netem-harness"
+path = "src/main.rs"
+bench = false
+
+[dependencies]
+blake3.workspace = true
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true

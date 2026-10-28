@@ -7,6 +7,7 @@ use std::io;
 use std::path::PathBuf;
 
 use crypto::CryptoError;
+use discovery::{DiscoveryError, Permission};
 use protocol::ProtocolError;
 use protocol::message::CloseReason;
 use storage::StorageError;
@@ -59,14 +60,95 @@ pub enum EngineError {
     Io(io::Error),
     #[error("internal error: {0}")]
     Internal(String),
+    /// This side declined an incoming offer, or nobody answered it in time
+    /// ([`TransferManager::accept_incoming`](crate::TransferManager::accept_incoming)).
+    /// The sender sees [`ConnectionRejected`](Self::ConnectionRejected).
+    #[error("incoming transfer declined")]
+    Declined,
+    /// Wi-Fi is off or the platform radio API hard-failed (manual §36).
+    #[error("radio unavailable: {0}")]
+    RadioUnavailable(String),
+    /// An OS permission is missing (manual §26); the UI deep-links to settings.
+    #[error("permission denied: {0:?}")]
+    PermissionDenied(Permission),
+    /// Discovery failed in a way with no better mapping (backend detail for logs).
+    #[error("discovery: {0}")]
+    Discovery(String),
+    /// No transfer with this id is known to the manager.
+    #[error("unknown transfer: {0}")]
+    UnknownTransfer(String),
+    /// The manager is shutting down and takes no new work.
+    #[error("transfer manager is shutting down")]
+    ShuttingDown,
+}
+
+/// Field-less mirror of [`EngineError`]'s variants: `Copy`, so it can sit in
+/// snapshots ([`TransferState::Failed`](crate::TransferState::Failed)) and cross
+/// the FFI boundary (manual §36: platforms never match on strings).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum ErrorCode {
+    PeerLost,
+    ConnectionRejected,
+    AuthenticationFailed,
+    DiskFull,
+    PeerDiskFull,
+    SourceFileChanged,
+    SourceFileMissing,
+    CorruptedData,
+    UnsupportedVersion,
+    Cancelled,
+    UnsafePath,
+    ProtocolViolation,
+    Timeout,
+    InvalidInput,
+    Io,
+    Internal,
+    Declined,
+    RadioUnavailable,
+    PermissionDenied,
+    Discovery,
+    UnknownTransfer,
+    ShuttingDown,
 }
 
 impl EngineError {
+    pub fn code(&self) -> ErrorCode {
+        match self {
+            EngineError::PeerLost => ErrorCode::PeerLost,
+            EngineError::ConnectionRejected => ErrorCode::ConnectionRejected,
+            EngineError::AuthenticationFailed => ErrorCode::AuthenticationFailed,
+            EngineError::DiskFull { .. } => ErrorCode::DiskFull,
+            EngineError::PeerDiskFull => ErrorCode::PeerDiskFull,
+            EngineError::SourceFileChanged { .. } => ErrorCode::SourceFileChanged,
+            EngineError::SourceFileMissing { .. } => ErrorCode::SourceFileMissing,
+            EngineError::CorruptedData => ErrorCode::CorruptedData,
+            EngineError::UnsupportedVersion => ErrorCode::UnsupportedVersion,
+            EngineError::Cancelled => ErrorCode::Cancelled,
+            EngineError::UnsafePath(_) => ErrorCode::UnsafePath,
+            EngineError::ProtocolViolation(_) => ErrorCode::ProtocolViolation,
+            EngineError::Timeout => ErrorCode::Timeout,
+            EngineError::InvalidInput(_) => ErrorCode::InvalidInput,
+            EngineError::Io(_) => ErrorCode::Io,
+            EngineError::Internal(_) => ErrorCode::Internal,
+            EngineError::Declined => ErrorCode::Declined,
+            EngineError::RadioUnavailable(_) => ErrorCode::RadioUnavailable,
+            EngineError::PermissionDenied(_) => ErrorCode::PermissionDenied,
+            EngineError::Discovery(_) => ErrorCode::Discovery,
+            EngineError::UnknownTransfer(_) => ErrorCode::UnknownTransfer,
+            EngineError::ShuttingDown => ErrorCode::ShuttingDown,
+        }
+    }
+
     /// Close reason to send the peer before tearing down because of `self`.
     pub(crate) fn close_reason(&self) -> CloseReason {
         match self {
             EngineError::Cancelled => CloseReason::Cancelled,
             EngineError::AuthenticationFailed => CloseReason::AuthenticationFailed,
+            // There is no dedicated wire reason; AuthenticationFailed makes the
+            // sender report "peer declined the connection" (manual §36), which is
+            // exactly what happened.
+            EngineError::Declined => CloseReason::AuthenticationFailed,
             EngineError::CorruptedData => CloseReason::IntegrityFailure,
             EngineError::UnsupportedVersion => CloseReason::UnsupportedVersion,
             EngineError::DiskFull { .. } => CloseReason::InsufficientSpace,
@@ -150,6 +232,21 @@ impl From<StorageError> for EngineError {
             StorageError::InvalidPath { path, reason } => EngineError::UnsafePath(format!("{path:?}: {reason}")),
             StorageError::SymlinkEscape { path } => EngineError::UnsafePath(format!("symlink at {}", path.display())),
             other => EngineError::Internal(other.to_string()),
+        }
+    }
+}
+
+impl From<DiscoveryError> for EngineError {
+    fn from(e: DiscoveryError) -> Self {
+        match e {
+            DiscoveryError::RadioUnavailable(m) => EngineError::RadioUnavailable(m),
+            DiscoveryError::PermissionDenied(p) => EngineError::PermissionDenied(p),
+            DiscoveryError::PeerLost => EngineError::PeerLost,
+            DiscoveryError::ConnectionRejected => EngineError::ConnectionRejected,
+            DiscoveryError::AuthenticationFailed => EngineError::AuthenticationFailed,
+            DiscoveryError::Timeout => EngineError::Timeout,
+            DiscoveryError::Io(e) => e.into(),
+            other => EngineError::Discovery(other.to_string()),
         }
     }
 }

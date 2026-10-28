@@ -5,6 +5,13 @@ all-features = true
 [advisories]
 version = 2
 yanked = "deny"
+ignore = [
+    # basic-toml is unmaintained (no vulnerability). It reaches us only through
+    # uniffi_bindgen -> askama, i.e. the build-time `uniffi-bindgen` binary behind
+    # platform-ffi's `bindgen` feature; it is never linked into an app and only
+    # parses uniffi's own templates/config. Drop this once uniffi moves off it.
+    { id = "RUSTSEC-2026-0374", reason = "dev-time binding generator only (uniffi_bindgen -> askama); not shipped" },
+]
 
 [licenses]
 version = 2

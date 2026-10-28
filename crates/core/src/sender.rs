@@ -35,6 +35,7 @@ use tracing::Instrument;
 use transport::{FrameWriter, Transport, TransportKind};
 
 use crate::error::{EngineError, Result};
+use crate::hooks::{self, Phase, PhaseFn};
 use crate::options::{CancelHandle, Progress, SendOptions};
 use crate::report::{Direction, PhaseTimings, TransferReport, rate, secs};
 use crate::secure::{Control, ControlRx, DataStream, SecureConnection, establish_initiator};
@@ -44,6 +45,34 @@ use crate::tasks::{CLOSE_LINGER, ControlReader, EventSink, abort_all, forward, j
 /// Pool buffers hold a whole sealed chunk body: sub-header + data + tag.
 pub(crate) const BODY_CAPACITY: usize = CHUNK_HEADER_LEN + CHUNK_SIZE as usize + TAG_LEN;
 
+/// How long a data-stream failure waits for the peer's reason on the control stream.
+const STREAM_FAILURE_GRACE: Duration = Duration::from_millis(500);
+
+/// A receiver that cancels stops its data streams too, and on QUIC the
+/// `STOP_SENDING` can overtake the `Cancel` sent on the control stream just
+/// before it. Briefly look for that reason so a cancel isn't reported as a lost
+/// peer; `e` stands if none arrives.
+async fn explain_stream_failure(ev_rx: &mut mpsc::UnboundedReceiver<Event>, e: EngineError) -> EngineError {
+    let reason = async {
+        while let Some(ev) = ev_rx.recv().await {
+            match ev {
+                Event::Control(Control::Cancel) => return Some(EngineError::Cancelled),
+                Event::Control(Control::Close(r)) => return Some(EngineError::from_peer_close(r)),
+                Event::ControlEof | Event::Failed(_) => return None,
+                _ => {}
+            }
+        }
+        None
+    };
+    match tokio::time::timeout(STREAM_FAILURE_GRACE, reason).await {
+        Ok(Some(reason)) => {
+            tracing::debug!(error = %e, reason = %reason, "data stream failed because the peer stopped the transfer");
+            reason
+        }
+        Ok(None) | Err(_) => e,
+    }
+}
+
 /// Hash the files at `paths`, connect to `addr` over `transport`, authenticate the
 /// peer and send everything (manual §9.2). Returns once the receiver confirmed it
 /// verified and stored every file.
@@ -52,6 +81,11 @@ pub(crate) const BODY_CAPACITY: usize = CHUNK_HEADER_LEN + CHUNK_SIZE as usize +
 /// connection (the receiver keeps its resume state); [`CancelHandle`] does the
 /// same but tells the peer first.
 pub async fn send_files<T: Transport>(transport: &T, addr: SocketAddr, paths: &[PathBuf], opts: &SendOptions) -> Result<TransferReport> {
+    send_files_hooked(transport, addr, paths, opts, None).await
+}
+
+/// [`send_files`] reporting its [`Phase`]s to `phase`.
+pub(crate) async fn send_files_hooked<T: Transport>(transport: &T, addr: SocketAddr, paths: &[PathBuf], opts: &SendOptions, phase: Option<PhaseFn<'_>>) -> Result<TransferReport> {
     if opts.streams == 0 || opts.streams > transport::MAX_DATA_STREAMS {
         return Err(EngineError::InvalidInput(format!("streams must be 1..={}", transport::MAX_DATA_STREAMS)));
     }
@@ -75,6 +109,7 @@ pub async fn send_files<T: Transport>(transport: &T, addr: SocketAddr, paths: &[
     .await??;
     timings.hash_secs = secs(started.elapsed());
     tracing::debug!(files = source.manifest.files.len(), bytes = source.manifest.total_bytes(), "hashed sources");
+    hooks::emit(phase, Phase::Hashed { bytes_total: source.manifest.total_bytes() });
 
     let t = Instant::now();
     let conn = transport.connect(addr, opts.streams).await?;
@@ -88,7 +123,7 @@ pub async fn send_files<T: Transport>(transport: &T, addr: SocketAddr, paths: &[
     timings.handshake_secs = secs(sc.handshake_time);
 
     let span = tracing::info_span!("send", transfer_id = %source.manifest.transfer_id, peer = %sc.peer.fingerprint);
-    run(sc, source, opts, timings, started).instrument(span).await
+    run(sc, source, opts, timings, started, phase).instrument(span).await
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -291,7 +326,7 @@ fn plan(manifest: Manifest, starts: Vec<u32>) -> Plan {
     Plan { manifest, starts, chunk_counts, total_chunks, resumed_bytes }
 }
 
-async fn run(mut sc: SecureConnection, source: Source, opts: &SendOptions, mut timings: PhaseTimings, started: Instant) -> Result<TransferReport> {
+async fn run(mut sc: SecureConnection, source: Source, opts: &SendOptions, mut timings: PhaseTimings, started: Instant, phase: Option<PhaseFn<'_>>) -> Result<TransferReport> {
     let mut xfer = Transfer::new(Role::Initiator);
     let t = Instant::now();
     let Source { manifest, files } = source;
@@ -317,6 +352,7 @@ async fn run(mut sc: SecureConnection, source: Source, opts: &SendOptions, mut t
     timings.manifest_secs = secs(t.elapsed());
     let plan = plan(manifest, starts);
     tracing::info!(chunks = plan.total_chunks, resumed_bytes = plan.resumed_bytes, "transfer accepted");
+    hooks::emit(phase, Phase::Accepted { bytes_total: plan.manifest.total_bytes(), resumed_bytes: plan.resumed_bytes });
 
     let streams = sc.data.len();
     let cipher = sc.cipher_name();
@@ -501,7 +537,8 @@ async fn drive(control_tx: &mut crate::secure::ControlTx, control_rx: ControlRx,
             Event::Control(other) => return Err(EngineError::violation(format!("unexpected {other:?} during transfer"))),
             Event::ControlEof => return Err(EngineError::PeerLost),
             // Chunks are still in flight: a broken data stream is fatal here.
-            Event::Failed(e) | Event::StreamFailed(e) => return Err(e),
+            Event::Failed(e) => return Err(e),
+            Event::StreamFailed(e) => return Err(explain_stream_failure(&mut ev_rx, e).await),
         }
     }
     xfer.on_event(TransferEvent::AllChunksConfirmed)?;

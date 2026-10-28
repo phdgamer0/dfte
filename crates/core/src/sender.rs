@@ -35,6 +35,7 @@ use tracing::Instrument;
 use transport::{FrameWriter, Transport, TransportKind};
 
 use crate::error::{EngineError, Result};
+use crate::hooks::{self, Phase, PhaseFn};
 use crate::options::{CancelHandle, Progress, SendOptions};
 use crate::report::{Direction, PhaseTimings, TransferReport, rate, secs};
 use crate::secure::{Control, ControlRx, DataStream, SecureConnection, establish_initiator};
@@ -52,6 +53,11 @@ pub(crate) const BODY_CAPACITY: usize = CHUNK_HEADER_LEN + CHUNK_SIZE as usize +
 /// connection (the receiver keeps its resume state); [`CancelHandle`] does the
 /// same but tells the peer first.
 pub async fn send_files<T: Transport>(transport: &T, addr: SocketAddr, paths: &[PathBuf], opts: &SendOptions) -> Result<TransferReport> {
+    send_files_hooked(transport, addr, paths, opts, None).await
+}
+
+/// [`send_files`] reporting its [`Phase`]s to `phase`.
+pub(crate) async fn send_files_hooked<T: Transport>(transport: &T, addr: SocketAddr, paths: &[PathBuf], opts: &SendOptions, phase: Option<PhaseFn<'_>>) -> Result<TransferReport> {
     if opts.streams == 0 || opts.streams > transport::MAX_DATA_STREAMS {
         return Err(EngineError::InvalidInput(format!("streams must be 1..={}", transport::MAX_DATA_STREAMS)));
     }
@@ -75,6 +81,7 @@ pub async fn send_files<T: Transport>(transport: &T, addr: SocketAddr, paths: &[
     .await??;
     timings.hash_secs = secs(started.elapsed());
     tracing::debug!(files = source.manifest.files.len(), bytes = source.manifest.total_bytes(), "hashed sources");
+    hooks::emit(phase, Phase::Hashed { bytes_total: source.manifest.total_bytes() });
 
     let t = Instant::now();
     let conn = transport.connect(addr, opts.streams).await?;
@@ -88,7 +95,7 @@ pub async fn send_files<T: Transport>(transport: &T, addr: SocketAddr, paths: &[
     timings.handshake_secs = secs(sc.handshake_time);
 
     let span = tracing::info_span!("send", transfer_id = %source.manifest.transfer_id, peer = %sc.peer.fingerprint);
-    run(sc, source, opts, timings, started).instrument(span).await
+    run(sc, source, opts, timings, started, phase).instrument(span).await
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -291,7 +298,7 @@ fn plan(manifest: Manifest, starts: Vec<u32>) -> Plan {
     Plan { manifest, starts, chunk_counts, total_chunks, resumed_bytes }
 }
 
-async fn run(mut sc: SecureConnection, source: Source, opts: &SendOptions, mut timings: PhaseTimings, started: Instant) -> Result<TransferReport> {
+async fn run(mut sc: SecureConnection, source: Source, opts: &SendOptions, mut timings: PhaseTimings, started: Instant, phase: Option<PhaseFn<'_>>) -> Result<TransferReport> {
     let mut xfer = Transfer::new(Role::Initiator);
     let t = Instant::now();
     let Source { manifest, files } = source;
@@ -317,6 +324,7 @@ async fn run(mut sc: SecureConnection, source: Source, opts: &SendOptions, mut t
     timings.manifest_secs = secs(t.elapsed());
     let plan = plan(manifest, starts);
     tracing::info!(chunks = plan.total_chunks, resumed_bytes = plan.resumed_bytes, "transfer accepted");
+    hooks::emit(phase, Phase::Accepted { bytes_total: plan.manifest.total_bytes(), resumed_bytes: plan.resumed_bytes });
 
     let streams = sc.data.len();
     let cipher = sc.cipher_name();

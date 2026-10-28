@@ -29,9 +29,10 @@ use storage::{BufferPool, CHUNK_SIZE, ChunkReader, PoolBuffer, RelPath, ResumeFi
 use tokio::sync::mpsc;
 use tokio::task::JoinSet;
 use tracing::Instrument;
-use transport::Listener;
+use transport::{Connection, Listener};
 
 use crate::error::{EngineError, Result};
+use crate::hooks::{self, OfferGate, Phase, PhaseFn};
 use crate::options::{Progress, ReceiveOptions};
 use crate::report::{Direction, PhaseTimings, TransferReport, rate, secs};
 use crate::secure::{Control, ControlTx, DataStream, SecureConnection, establish_responder};
@@ -49,9 +50,20 @@ use crate::tasks::{CLOSE_LINGER, ControlReader, EventSink, abort_all, forward_bo
 /// last flushed sidecar remain usable for a later resume.
 pub async fn receive<L: Listener>(listener: &mut L, staging_dir: &Path, dest_dir: &Path, opts: &ReceiveOptions) -> Result<TransferReport> {
     let started = Instant::now();
-    let mut timings = PhaseTimings::default();
     let conn = listener.accept().await?;
-    timings.connect_secs = secs(started.elapsed());
+    receive_connection(conn, started, staging_dir, Dest::Fixed(dest_dir), opts, None).await
+}
+
+/// Where accepted files go.
+pub(crate) enum Dest<'a> {
+    Fixed(&'a Path),
+    /// Ask once the offer is in; `Err` rejects it.
+    Ask(OfferGate<'a>),
+}
+
+/// [`receive`] on an already accepted connection; `started` is when accepting began.
+pub(crate) async fn receive_connection(conn: Connection, started: Instant, staging_dir: &Path, dest: Dest<'_>, opts: &ReceiveOptions, phase: Option<PhaseFn<'_>>) -> Result<TransferReport> {
+    let mut timings = PhaseTimings { connect_secs: secs(started.elapsed()), ..PhaseTimings::default() };
 
     #[cfg(feature = "bench-insecure-plaintext")]
     let allow_plaintext = opts.allow_insecure_plaintext;
@@ -61,7 +73,7 @@ pub async fn receive<L: Listener>(listener: &mut L, staging_dir: &Path, dest_dir
     timings.handshake_secs = secs(sc.handshake_time);
 
     let span = tracing::info_span!("receive", transfer_id = tracing::field::Empty, peer = %sc.peer.fingerprint);
-    run(sc, staging_dir.to_path_buf(), dest_dir.to_path_buf(), opts, timings, started).instrument(span).await
+    run(sc, staging_dir.to_path_buf(), dest, opts, timings, started, phase).instrument(span).await
 }
 
 /// Everything prepared for an accepted manifest.
@@ -335,7 +347,8 @@ async fn wait_offer(sc: &mut SecureConnection, opts: &ReceiveOptions) -> Result<
     }
 }
 
-async fn run(mut sc: SecureConnection, staging: PathBuf, dest: PathBuf, opts: &ReceiveOptions, mut timings: PhaseTimings, started: Instant) -> Result<TransferReport> {
+#[allow(clippy::too_many_arguments)]
+async fn run(mut sc: SecureConnection, staging: PathBuf, dest: Dest<'_>, opts: &ReceiveOptions, mut timings: PhaseTimings, started: Instant, phase: Option<PhaseFn<'_>>) -> Result<TransferReport> {
     let mut xfer = Transfer::new(Role::Responder);
     let t = Instant::now();
     let prepared = async {
@@ -344,12 +357,24 @@ async fn run(mut sc: SecureConnection, staging: PathBuf, dest: PathBuf, opts: &R
         xfer.on_event(TransferEvent::OfferReceived)?;
         tracing::Span::current().record("transfer_id", tracing::field::display(manifest.transfer_id));
         let m = manifest.clone();
+        let dest = match dest {
+            Dest::Fixed(d) => d.to_path_buf(),
+            // The gate bounds its own wait (accept timeout). A peer that gives up
+            // meanwhile is noticed on the first read after the decision.
+            Dest::Ask(gate) => {
+                let decision = gate(&manifest, &sc.peer);
+                tokio::select! {
+                    d = decision => d?,
+                    () = cancelled(&opts.common.cancel) => return Err(EngineError::Cancelled),
+                }
+            }
+        };
         let (s, d) = (staging.clone(), dest.clone());
         let inc = tokio::task::spawn_blocking(move || prepare_blocking(&m, &s, &d)).await??;
-        Ok((manifest, inc))
+        Ok((manifest, inc, dest))
     }
     .await;
-    let (manifest, mut inc) = match prepared {
+    let (manifest, mut inc, dest) = match prepared {
         Ok(v) => v,
         Err(e) => {
             tracing::warn!(error = %e, "rejecting transfer");
@@ -364,6 +389,7 @@ async fn run(mut sc: SecureConnection, staging: PathBuf, dest: PathBuf, opts: &R
     timings.manifest_secs = secs(t.elapsed()) - inc.rehash_secs;
     timings.hash_secs = inc.rehash_secs;
     tracing::info!(files = manifest.files.len(), resumed_bytes = inc.resumed_bytes, staging_id = %inc.staging_id, "transfer accepted");
+    hooks::emit(phase, Phase::Accepted { bytes_total: manifest.total_bytes(), resumed_bytes: inc.resumed_bytes });
 
     let streams = sc.data.len();
     let cipher = sc.cipher_name();

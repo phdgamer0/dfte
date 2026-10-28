@@ -315,6 +315,26 @@ async fn rejected_sas_blocks_transfer() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn manifest_hook_sees_offer_and_can_decline_before_any_write() {
+    let d = dirs();
+    let f = d.src.join("f.txt");
+    std::fs::write(&f, b"hello").unwrap();
+    let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let s2 = Arc::clone(&seen);
+    let mut ropts = recv_opts(Arc::new(TrustAny));
+    ropts.on_manifest = Some(dfte_core::ManifestHook::new(move |m: &dfte_core::Manifest| {
+        s2.lock().unwrap().extend(m.files.iter().map(|e| (e.relative_path.clone(), e.size)));
+        false
+    }));
+    let (s, r) = run_pair(&d, vec![f], send_opts(1, Arc::new(TrustAny)), ropts, None).await;
+    assert!(matches!(r, Err(EngineError::Cancelled)), "{r:?}");
+    assert!(matches!(s, Err(EngineError::Cancelled)), "{s:?}");
+    assert_eq!(*seen.lock().unwrap(), vec![("f.txt".to_owned(), 5)]);
+    assert!(!d.staging.exists() || std::fs::read_dir(&d.staging).unwrap().next().is_none(), "nothing staged");
+    assert!(!d.out.join("f.txt").exists());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn sender_cancel_keeps_receiver_resume_state() {
     let d = dirs();
     let f = d.src.join("f.bin");

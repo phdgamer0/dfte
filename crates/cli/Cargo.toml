@@ -1,0 +1,40 @@
+[package]
+name = "dfte-cli"
+description = "dfte: the Linux command-line app (manual §5 Linux, §6, §12.1, §17, §19, §36)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+# Criterion flags reach every bench target; the libtest harness rejects them.
+[lib]
+bench = false
+
+[[bin]]
+name = "dfte"
+path = "src/main.rs"
+bench = false
+
+[lints]
+workspace = true
+
+[dependencies]
+dfte-core.workspace = true
+transport.workspace = true
+discovery.workspace = true
+storage.workspace = true
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "time", "signal", "sync"] }
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tempfile.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+zeroize.workspace = true
+qrcode = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+rustix = { workspace = true, features = ["fs", "process", "system"] }
+

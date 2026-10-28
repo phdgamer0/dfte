@@ -6,6 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use crypto::DeviceIdentity;
+use protocol::Manifest;
 use tokio::sync::Notify;
 
 /// What the handshake established about the peer, shown to the user for the SAS /
@@ -153,6 +154,26 @@ fn default_device_name() -> String {
     std::env::var("HOSTNAME").ok().filter(|s| !s.is_empty()).unwrap_or_else(|| "dfte".to_owned())
 }
 
+/// Called by the receiver with the sender's (already validated) manifest after the
+/// peer is verified and before anything is written to staging or the destination,
+/// so a UI can show what is about to arrive (manual §35). Returning `false`
+/// declines the transfer: the sender is told `Cancelled` and nothing is written.
+/// May block (it runs on a blocking-I/O thread, like [`PeerVerifier`]).
+#[derive(Clone)]
+pub struct ManifestHook(pub Arc<dyn Fn(&Manifest) -> bool + Send + Sync>);
+
+impl ManifestHook {
+    pub fn new(f: impl Fn(&Manifest) -> bool + Send + Sync + 'static) -> Self {
+        Self(Arc::new(f))
+    }
+}
+
+impl fmt::Debug for ManifestHook {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("ManifestHook(..)")
+    }
+}
+
 /// Sender settings.
 #[derive(Clone, Debug)]
 pub struct SendOptions {
@@ -200,6 +221,8 @@ pub struct ReceiveOptions {
     pub pool_buffers: usize,
     /// Persist the resume sidecar every N confirmed chunks (manual §19: 32 = 128 MiB).
     pub flush_every: u32,
+    /// Shown the offered manifest before anything is written; see [`ManifestHook`].
+    pub on_manifest: Option<ManifestHook>,
     /// Benchmark-only: agree to unencrypted data streams if the sender asks.
     #[cfg(feature = "bench-insecure-plaintext")]
     pub allow_insecure_plaintext: bool,
@@ -212,6 +235,7 @@ impl ReceiveOptions {
             max_streams: transport::MAX_DATA_STREAMS as u8,
             pool_buffers: 16,
             flush_every: storage::resume::DEFAULT_FLUSH_EVERY,
+            on_manifest: None,
             #[cfg(feature = "bench-insecure-plaintext")]
             allow_insecure_plaintext: false,
         }

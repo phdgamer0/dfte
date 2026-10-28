@@ -84,7 +84,7 @@ impl Transport for TcpTransport {
         }
         let mut streams = streams.into_iter().map(framed);
         let control = streams.next().ok_or(TransportError::InvalidStreamCount(0))?;
-        Ok(Connection { kind: TransportKind::Tcp, peer: addr, control, data: streams.collect() })
+        Ok(Connection { kind: TransportKind::Tcp, peer: addr, peer_key: None, control, data: streams.collect() })
     }
 }
 
@@ -134,7 +134,7 @@ impl Listener for TcpListener {
                 let g = self.pending.remove(&token).ok_or(TransportError::BadPreamble)?;
                 let mut streams = g.slots.into_iter().flatten().map(framed);
                 let control = streams.next().ok_or(TransportError::BadPreamble)?;
-                return Ok(Connection { kind: TransportKind::Tcp, peer: g.peer, control, data: streams.collect() });
+                return Ok(Connection { kind: TransportKind::Tcp, peer: g.peer, peer_key: None, control, data: streams.collect() });
             }
         }
     }

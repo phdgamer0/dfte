@@ -5,7 +5,8 @@
 use protocol::MsgType;
 use protocol::header::Header;
 use tokio::io::AsyncWriteExt;
-use transport::{Listener, TcpTransport, Transport, TransportError};
+use crypto::DeviceIdentity;
+use transport::{Listener, QuicConfig, QuicTransport, TcpTransport, Transport, TransportError};
 
 fn hdr(t: MsgType, stream: u32, seq: u64, len: usize) -> Header {
     Header::new(t, 0, stream, seq, len as u32)
@@ -67,6 +68,11 @@ async fn tcp_conformance() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn quic_conformance() {
+    suite(QuicTransport::new(&DeviceIdentity::generate().unwrap(), QuicConfig::default()).unwrap()).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn tcp_garbage_socket_does_not_break_listener() {
     let t = TcpTransport::default();
     let mut l = t.listen("127.0.0.1:0".parse().unwrap()).await.unwrap();
@@ -82,6 +88,13 @@ async fn tcp_garbage_socket_does_not_break_listener() {
 #[tokio::test]
 async fn invalid_stream_counts() {
     let t = TcpTransport::default();
+    assert!(matches!(t.connect("127.0.0.1:9".parse().unwrap(), 0).await, Err(TransportError::InvalidStreamCount(0))));
+    assert!(matches!(t.connect("127.0.0.1:9".parse().unwrap(), 17).await, Err(TransportError::InvalidStreamCount(17))));
+}
+
+#[tokio::test]
+async fn quic_invalid_stream_counts() {
+    let t = QuicTransport::new(&DeviceIdentity::generate().unwrap(), QuicConfig::default()).unwrap();
     assert!(matches!(t.connect("127.0.0.1:9".parse().unwrap(), 0).await, Err(TransportError::InvalidStreamCount(0))));
     assert!(matches!(t.connect("127.0.0.1:9".parse().unwrap(), 17).await, Err(TransportError::InvalidStreamCount(17))));
 }

@@ -56,13 +56,19 @@ async fn data_written_before_drop_is_delivered() {
     let (c, s) = tokio::join!(client.connect(addr, 1), l.accept());
     let (mut c, mut s) = (c.unwrap(), s.unwrap());
     let body = vec![5u8; 8 << 20];
-    c.data[0].writer.write_frame(&Header::new(MsgType::ChunkData, 0, 0, 0, body.len() as u32), &[&body]).await.unwrap();
-    drop(c);
+    // 8 MiB is larger than the per-stream flow-control window, so the write can
+    // only finish while the peer reads: run both sides concurrently.
+    let sent = body.clone();
+    let writer = tokio::spawn(async move {
+        c.data[0].writer.write_frame(&Header::new(MsgType::ChunkData, 0, 0, 0, sent.len() as u32), &[&sent]).await.unwrap();
+        drop(c);
+    });
     let h = s.data[0].reader.read_header().await.unwrap().unwrap();
     let mut dst = vec![0u8; body.len()];
     s.data[0].reader.read_body_into(&h, &mut dst).await.unwrap();
     assert!(dst == body);
     assert!(s.data[0].reader.read_header().await.unwrap().is_none());
+    writer.await.unwrap();
 }
 
 /// A raw quinn server presenting `cert`/`key` instead of a DFTE identity.

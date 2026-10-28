@@ -7,6 +7,8 @@ use crate::error::ProtocolError;
 pub enum MsgType {
     Hello = 0x01,
     HelloAck = 0x02,
+    /// Noise_XX handshake message on the control stream (manual §12.1, TCP backend).
+    Handshake = 0x03,
     ChunkData = 0x10,
     ChunkAck = 0x11,
     SelectiveNack = 0x12,
@@ -19,7 +21,7 @@ pub enum MsgType {
 }
 
 impl MsgType {
-    pub const ALL: [MsgType; 11] = [MsgType::Hello, MsgType::HelloAck, MsgType::ChunkData, MsgType::ChunkAck, MsgType::SelectiveNack, MsgType::ManifestOffer, MsgType::ManifestAccept, MsgType::Cancel, MsgType::Ping, MsgType::Pong, MsgType::Close];
+    pub const ALL: [MsgType; 12] = [MsgType::Hello, MsgType::HelloAck, MsgType::Handshake, MsgType::ChunkData, MsgType::ChunkAck, MsgType::SelectiveNack, MsgType::ManifestOffer, MsgType::ManifestAccept, MsgType::Cancel, MsgType::Ping, MsgType::Pong, MsgType::Close];
 }
 
 impl TryFrom<u8> for MsgType {
@@ -29,6 +31,7 @@ impl TryFrom<u8> for MsgType {
         Ok(match value {
             0x01 => MsgType::Hello,
             0x02 => MsgType::HelloAck,
+            0x03 => MsgType::Handshake,
             0x10 => MsgType::ChunkData,
             0x11 => MsgType::ChunkAck,
             0x12 => MsgType::SelectiveNack,

@@ -21,7 +21,7 @@ use netem_harness::runner::{self, Caps, RunCtx, RunResult, Source, Status};
 use netem_harness::{results, topology};
 
 #[derive(Parser)]
-#[command(name = "netem-harness", about = "netns + tc/netem loss/latency/reorder matrix over engine-bench (manual §31)")]
+#[command(name = "netem-harness", about = "netns + tc/netem loss/latency/reorder matrix over engine-bench (manual §31)", after_help = "Needs root (CAP_NET_ADMIN + CAP_SYS_ADMIN); in CI: sudo netem-harness --require-root.\n\nWithout sudo, run it inside a user + net + mount namespace with a private /run\n(the veth and sch_netem kernel modules must already be loaded on the host):\n\n  unshare -rmn sh -c 'mount -t tmpfs tmpfs /run && mkdir /run/netns && exec netem-harness --engine-bench \"$PWD/target/release/engine-bench\" ...'")]
 struct Cli {
     /// The engine-bench binary (build with `cargo build --release -p bench`).
     #[arg(long, default_value = "target/release/engine-bench")]

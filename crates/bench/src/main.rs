@@ -203,8 +203,8 @@ async fn run(cli: Cli) -> Result<(), BoxError> {
             opts.insecure_plaintext = plaintext;
             eprintln!("this device: {}", opts.common.identity.fingerprint());
             let r = match transport {
-                TransportArg::Tcp => send_files(&TcpTransport::default(), target, &files, &opts).await?,
-                TransportArg::Quic => send_files(&quic(&opts.common.identity)?, target, &files, &opts).await?,
+                TransportArg::Tcp => send_on(&TcpTransport::default(), target, &files, &opts).await?,
+                TransportArg::Quic => send_on(&quic(&opts.common.identity)?, target, &files, &opts).await?,
             };
             emit(cli.json, &r, || print_report(&r))?;
         }
@@ -330,16 +330,39 @@ where
     let mut l = recv_t.listen("127.0.0.1:0".parse()?).await?;
     let addr = l.local_addr()?;
     let (s2, o2) = (staging.to_path_buf(), out.to_path_buf());
-    let rx = tokio::spawn(async move { receive(&mut l, &s2, &o2, &ropts).await });
-    let sender = send_files(send_t, addr, paths, sopts).await?;
+    let rx = tokio::spawn(async move {
+        let r = receive(&mut l, &s2, &o2, &ropts).await;
+        drained("receiver", l.drain().await);
+        r
+    });
+    let sender = send_files(send_t, addr, paths, sopts).await;
+    drained("sender", send_t.drain().await);
     let receiver = rx.await??;
-    Ok((sender, receiver))
+    Ok((sender?, receiver))
 }
 
 async fn recv_on<T: Transport>(t: &T, listen: SocketAddr, staging: &Path, out: &Path, opts: &ReceiveOptions) -> Result<TransferReport, BoxError> {
     let mut l = t.listen(listen).await?;
     eprintln!("listening on {} ({:?})", l.local_addr()?, t.kind());
-    Ok(receive(&mut l, staging, out, opts).await?)
+    let r = receive(&mut l, staging, out, opts).await;
+    drained("receiver", l.drain().await);
+    Ok(r?)
+}
+
+async fn send_on<T: Transport>(t: &T, target: SocketAddr, files: &[PathBuf], opts: &SendOptions) -> Result<TransferReport, BoxError> {
+    let r = send_files(t, target, files, opts).await;
+    drained("sender", t.drain().await);
+    Ok(r?)
+}
+
+/// The process is about to exit: let the transport deliver what it still owes
+/// the peer (QUIC retransmits in userspace, see `Transport::drain`). The
+/// transfer's own result is what this side reports; an undelivered tail is
+/// surfaced on stderr, since the peer may then fail.
+fn drained(side: &str, r: transport::Result<()>) {
+    if let Err(e) = r {
+        eprintln!("warning: {side} transport did not drain before exit: {e}; the peer may see the connection drop");
+    }
 }
 
 /// QUIC endpoint whose TLS identity is the engine identity (manual §12.1).

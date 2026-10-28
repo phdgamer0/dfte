@@ -1,3 +1,6 @@
+// TODO(phase-1): drop once the codec consumes the header/manifest constants.
+#![allow(dead_code)]
+
 mod error;
 mod header;
 mod manifest;

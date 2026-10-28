@@ -1,0 +1,13 @@
+[package]
+name = "storage"
+description = "File I/O, chunking, pre-allocation and resume state (manual §14/§17-§20)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]

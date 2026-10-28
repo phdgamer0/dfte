@@ -1,11 +1,20 @@
 [package]
 name = "protocol"
-version = "0.1.0"
-edition = "2024"
+description = "Wire format, control messages and protocol state machines (manual §8-§11)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[lints]
+workspace = true
 
 [dependencies]
-uuid = { version = "1.26.1", features = ["serde"] }
-serde = { version = "1.0.229", features = ["derive"] }
-rmp-serde = "1.3.1"
-proptest = "1.11.0"
-thiserror = "2.0.21"
+uuid.workspace = true
+serde.workspace = true
+rmp-serde.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true

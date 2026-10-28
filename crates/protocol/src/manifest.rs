@@ -28,6 +28,7 @@ pub struct FileEntry {
     pub modified_time: i64,
     pub permissions: Option<u32>,
     /// BLAKE3 of the whole file (manual §19/§20). Zero for directories.
+    #[serde(with = "serde_bytes")]
     pub content_hash: [u8; 32],
     pub chunk_count: u32,
     /// Empty-directory sentinel (manual §17): size 0, no chunks.

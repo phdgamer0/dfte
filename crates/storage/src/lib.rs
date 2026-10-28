@@ -16,7 +16,7 @@ pub mod writer;
 
 pub use chunk::{CHUNK_SIZE, ChunkReader, chunk_count, chunk_len, chunk_offset, chunk_range};
 pub use error::{Result, StorageError};
-pub use hash::{FileHasher, hash_chunk, hash_file_blocking};
+pub use hash::{FileHasher, file_hash_from_pieces, hash_chunk, hash_file_blocking, hash_file_parallel_blocking, piece_hash};
 pub use path::{RelPath, safe_join_blocking, sanitize_component, validate_relative_path};
 pub use pool::{BufferPool, PoolBuffer};
 pub use resume::{ChunkBitmap, ResumeFile, ResumeState, ResumeStore, scan_orphans_blocking};

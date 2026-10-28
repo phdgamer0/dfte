@@ -106,6 +106,22 @@ impl StagedFile {
     pub fn finalize_blocking(self, expected_hash: &[u8; 32]) -> Result<PathBuf> {
         self.file.sync_all()?;
         let actual = hash_reader_blocking(File::open(&self.staging_path)?)?;
+        self.commit_blocking(expected_hash, actual)
+    }
+
+    /// Like [`finalize_blocking`](Self::finalize_blocking) but derives the whole-file
+    /// hash from the per-chunk [`crate::piece_hash`]es computed while receiving,
+    /// instead of reading the file back (manual §20). Verifies what was written
+    /// from memory; use `finalize_blocking` to also re-check what the OS returns.
+    pub fn finalize_with_pieces_blocking(self, expected_hash: &[u8; 32], pieces: &[[u8; 32]]) -> Result<PathBuf> {
+        self.file.sync_all()?;
+        let Some(actual) = crate::file_hash_from_pieces(self.size, pieces) else {
+            return Err(StorageError::PieceCountMismatch { expected: self.chunk_count().max(1), actual: pieces.len() as u64 });
+        };
+        self.commit_blocking(expected_hash, actual)
+    }
+
+    fn commit_blocking(self, expected_hash: &[u8; 32], actual: [u8; 32]) -> Result<PathBuf> {
         if &actual != expected_hash {
             return Err(StorageError::HashMismatch { path: self.staging_path, expected: *expected_hash, actual });
         }
@@ -209,6 +225,26 @@ mod tests {
         let sf = StagedFile::open_existing_blocking(staging.path(), "t2.0", dest.clone(), size).unwrap();
         sf.write_chunk_blocking(1, chunk(&d, 1)).unwrap();
         sf.finalize_blocking(&hash_chunk(&d)).unwrap();
+        assert_eq!(std::fs::read(&dest).unwrap(), d);
+    }
+
+    #[test]
+    fn finalize_with_pieces_skips_reread() {
+        let staging = tempfile::tempdir().unwrap();
+        let size = 2 * CHUNK_SIZE + 5;
+        let d = data(size);
+        let dest = staging.path().join("p.bin");
+        let sf = StagedFile::create_blocking(staging.path(), "t4.0", dest.clone(), size).unwrap();
+        let mut pieces = Vec::new();
+        for i in 0..3 {
+            sf.write_chunk_blocking(i, chunk(&d, i)).unwrap();
+            pieces.push(crate::piece_hash(size, i, chunk(&d, i)));
+        }
+        assert!(matches!(StagedFile::open_existing_blocking(staging.path(), "t4.0", dest.clone(), size).unwrap().finalize_with_pieces_blocking(&hash_chunk(&d), &pieces[..2]), Err(StorageError::PieceCountMismatch { expected: 3, actual: 2 })));
+        let mut bad = pieces.clone();
+        bad[1][0] ^= 1;
+        assert!(matches!(StagedFile::open_existing_blocking(staging.path(), "t4.0", dest.clone(), size).unwrap().finalize_with_pieces_blocking(&hash_chunk(&d), &bad), Err(StorageError::HashMismatch { .. })));
+        sf.finalize_with_pieces_blocking(&hash_chunk(&d), &pieces).unwrap();
         assert_eq!(std::fs::read(&dest).unwrap(), d);
     }
 

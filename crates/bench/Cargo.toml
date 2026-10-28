@@ -14,4 +14,19 @@ bench = false
 [lints]
 workspace = true
 
+[[bin]]
+name = "engine-bench"
+path = "src/main.rs"
+# Criterion flags reach every bench target; this binary has no benches.
+bench = false
+
 [dependencies]
+# The bench is the only crate allowed to enable the plaintext mode (§30 #2).
+dfte-core = { workspace = true, features = ["bench-insecure-plaintext"] }
+transport.workspace = true
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "io-std", "io-util"] }
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true
+tracing-subscriber.workspace = true

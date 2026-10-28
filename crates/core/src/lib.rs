@@ -16,7 +16,8 @@ mod tasks;
 
 pub use crypto::DeviceIdentity;
 pub use error::{EngineError, Result};
-pub use options::{CancelHandle, CommonOptions, ExpectFingerprint, PeerAuth, PeerVerifier, Progress, ProgressFn, ReceiveOptions, SendOptions, TrustAny};
+pub use options::{CancelHandle, CommonOptions, ExpectFingerprint, ManifestHook, PeerAuth, PeerVerifier, Progress, ProgressFn, ReceiveOptions, SendOptions, TrustAny};
+pub use protocol::{FileEntry, Manifest};
 pub use receiver::receive;
 pub use report::{Direction, PhaseTimings, TransferReport};
 pub use sender::send_files;

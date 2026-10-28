@@ -96,9 +96,24 @@ pub trait Transport: Send + Sync {
     fn kind(&self) -> TransportKind;
     fn listen(&self, addr: SocketAddr) -> impl Future<Output = Result<Self::Listener>> + Send;
     fn connect(&self, addr: SocketAddr, data_streams: usize) -> impl Future<Output = Result<Connection>> + Send;
+
+    /// Waits until data still owed to peers on connections the caller already
+    /// dropped has been delivered. Call it before the process exits. TCP needs
+    /// nothing (the kernel keeps delivering after close). QUIC retransmits in
+    /// userspace, so exiting first loses an unacknowledged final message under
+    /// packet loss (found by the netem harness). `Err(Timeout)` means something
+    /// was still undelivered after the configured linger.
+    fn drain(&self) -> impl Future<Output = Result<()>> + Send {
+        async { Ok(()) }
+    }
 }
 
 pub trait Listener: Send {
     fn local_addr(&self) -> Result<SocketAddr>;
     fn accept(&mut self) -> impl Future<Output = Result<Connection>> + Send;
+
+    /// Same contract as [`Transport::drain`], for connections this listener accepted.
+    fn drain(&self) -> impl Future<Output = Result<()>> + Send {
+        async { Ok(()) }
+    }
 }

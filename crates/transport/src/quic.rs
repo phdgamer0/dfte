@@ -156,12 +156,71 @@ impl QuicConfig {
     }
 }
 
+/// Linger tasks and endpoints that must finish before the process may exit
+/// (see [`Transport::drain`]). Shared by a transport, its listeners and writers.
+#[derive(Clone, Default)]
+struct Drainer(Arc<std::sync::Mutex<DrainState>>);
+
+#[derive(Default)]
+struct DrainState {
+    lingers: Vec<tokio::task::JoinHandle<()>>,
+    endpoints: Vec<quinn::Endpoint>,
+}
+
+impl Drainer {
+    fn state(&self) -> std::sync::MutexGuard<'_, DrainState> {
+        // A panic while holding this lock can only interrupt a Vec push or take;
+        // the state is still consistent, so poisoning is recovered, not fatal.
+        self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn add_linger(&self, h: tokio::task::JoinHandle<()>) {
+        let mut st = self.state();
+        st.lingers.retain(|t| !t.is_finished());
+        st.lingers.push(h);
+    }
+
+    fn add_endpoint(&self, ep: &quinn::Endpoint) {
+        self.state().endpoints.push(ep.clone());
+    }
+
+    async fn drain(&self, linger: Duration) -> Result<()> {
+        let (lingers, endpoints) = {
+            let mut st = self.state();
+            (std::mem::take(&mut st.lingers), st.endpoints.clone())
+        };
+        let mut timed_out = false;
+        let deadline = tokio::time::Instant::now() + linger;
+        for h in lingers {
+            match tokio::time::timeout_at(deadline, h).await {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) if e.is_cancelled() => {}
+                Ok(Err(e)) => std::panic::resume_unwind(e.into_panic()),
+                Err(_) => timed_out = true,
+            }
+        }
+        // Every stream is delivered (or given up on); let the connections close
+        // gracefully so the peer gets CONNECTION_CLOSE rather than silence.
+        for ep in &endpoints {
+            if tokio::time::timeout_at(deadline, ep.wait_idle()).await.is_err() {
+                timed_out = true;
+            }
+        }
+        if timed_out {
+            tracing::warn!(?linger, "quic: drain timed out with data or connections still pending");
+            return Err(TransportError::Timeout);
+        }
+        Ok(())
+    }
+}
+
 /// QUIC transport bound to one device identity.
 #[derive(Clone)]
 pub struct QuicTransport {
     config: QuicConfig,
     client: quinn::ClientConfig,
     server: quinn::ServerConfig,
+    drainer: Drainer,
 }
 
 impl std::fmt::Debug for QuicTransport {
@@ -189,7 +248,7 @@ impl QuicTransport {
         let mut server = quinn::ServerConfig::with_crypto(Arc::new(QuicServerConfig::try_from(tls_server).map_err(|_| TransportError::InvalidConfig("tls server"))?));
         server.transport_config(transport);
 
-        Ok(Self { config, client, server })
+        Ok(Self { config, client, server, drainer: Drainer::default() })
     }
 
     pub fn config(&self) -> &QuicConfig {
@@ -205,7 +264,9 @@ impl QuicTransport {
             sock.set_recv_buffer_size(n)?;
         }
         sock.bind(&bind.into())?;
-        Ok(quinn::Endpoint::new(EndpointConfig::default(), server, sock.into(), Arc::new(quinn::TokioRuntime))?)
+        let ep = quinn::Endpoint::new(EndpointConfig::default(), server, sock.into(), Arc::new(quinn::TokioRuntime))?;
+        self.drainer.add_endpoint(&ep);
+        Ok(ep)
     }
 }
 
@@ -218,7 +279,7 @@ impl Transport for QuicTransport {
 
     async fn listen(&self, addr: SocketAddr) -> Result<QuicListener> {
         let endpoint = self.endpoint(addr, Some(self.server.clone()))?;
-        Ok(QuicListener { endpoint, config: self.config.clone(), pending: JoinSet::new() })
+        Ok(QuicListener { endpoint, config: self.config.clone(), pending: JoinSet::new(), drainer: self.drainer.clone() })
     }
 
     async fn connect(&self, addr: SocketAddr, data_streams: usize) -> Result<Connection> {
@@ -227,7 +288,7 @@ impl Transport for QuicTransport {
         }
         let bind = SocketAddr::new(if addr.is_ipv4() { IpAddr::V4(Ipv4Addr::UNSPECIFIED) } else { IpAddr::V6(Ipv6Addr::UNSPECIFIED) }, 0);
         let endpoint = self.endpoint(bind, None)?;
-        let linger = self.config.linger;
+        let (linger, drainer) = (self.config.linger, self.drainer.clone());
         let setup = async {
             let conn = endpoint.connect_with(self.client.clone(), addr, SERVER_NAME)?.await?;
             let peer_key = peer_key(&conn)?;
@@ -236,7 +297,7 @@ impl Transport for QuicTransport {
             for index in 0..total {
                 let (mut send, recv) = conn.open_bi().await?;
                 send.write_all(&preamble(index as u8, total as u8)).await.map_err(io::Error::from)?;
-                streams.push(framed(send, recv, linger));
+                streams.push(framed(send, recv, linger, &drainer));
             }
             let mut streams = streams.into_iter();
             let control = streams.next().ok_or(TransportError::InvalidStreamCount(0))?;
@@ -244,12 +305,17 @@ impl Transport for QuicTransport {
         };
         tokio::time::timeout(self.config.handshake_timeout, setup).await.map_err(|_| TransportError::Timeout)?
     }
+
+    async fn drain(&self) -> Result<()> {
+        self.drainer.drain(self.config.linger).await
+    }
 }
 
 pub struct QuicListener {
     endpoint: quinn::Endpoint,
     config: QuicConfig,
     pending: JoinSet<Result<Connection>>,
+    drainer: Drainer,
 }
 
 impl Listener for QuicListener {
@@ -269,8 +335,8 @@ impl Listener for QuicListener {
                         incoming.refuse();
                         continue;
                     }
-                    let (timeout, linger) = (self.config.handshake_timeout, self.config.linger);
-                    self.pending.spawn(async move { tokio::time::timeout(timeout, accept_one(incoming, linger)).await.map_err(|_| TransportError::Timeout)? });
+                    let (timeout, linger, drainer) = (self.config.handshake_timeout, self.config.linger, self.drainer.clone());
+                    self.pending.spawn(async move { tokio::time::timeout(timeout, accept_one(incoming, linger, drainer)).await.map_err(|_| TransportError::Timeout)? });
                 }
                 Some(done) = self.pending.join_next(), if !self.pending.is_empty() => match done {
                     Ok(Ok(conn)) => return Ok(conn),
@@ -280,9 +346,13 @@ impl Listener for QuicListener {
             }
         }
     }
+
+    async fn drain(&self) -> Result<()> {
+        self.drainer.drain(self.config.linger).await
+    }
 }
 
-async fn accept_one(incoming: quinn::Incoming, linger: Duration) -> Result<Connection> {
+async fn accept_one(incoming: quinn::Incoming, linger: Duration, drainer: Drainer) -> Result<Connection> {
     let conn = incoming.await?;
     let peer_key = peer_key(&conn)?;
     let mut slots: Vec<Option<FramedStream>> = Vec::new();
@@ -298,7 +368,7 @@ async fn accept_one(incoming: quinn::Incoming, linger: Duration) -> Result<Conne
             return Err(TransportError::BadPreamble);
         }
         let slot = slots.get_mut(index).ok_or(TransportError::BadPreamble)?;
-        if slot.replace(framed(send, recv, linger)).is_some() {
+        if slot.replace(framed(send, recv, linger, &drainer)).is_some() {
             return Err(TransportError::BadPreamble);
         }
         if slots.iter().all(Option::is_some) {
@@ -310,8 +380,8 @@ async fn accept_one(incoming: quinn::Incoming, linger: Duration) -> Result<Conne
     Ok(Connection { kind: TransportKind::Quic, peer: conn.remote_address(), peer_key: Some(peer_key), control, data: streams.collect() })
 }
 
-fn framed(send: SendStream, recv: RecvStream, linger: Duration) -> FramedStream {
-    FramedStream::new(Box::new(recv), Box::new(QuicWriter { stream: Some(send), linger }))
+fn framed(send: SendStream, recv: RecvStream, linger: Duration, drainer: &Drainer) -> FramedStream {
+    FramedStream::new(Box::new(recv), Box::new(QuicWriter { stream: Some(send), linger, drainer: drainer.clone() }))
 }
 
 fn preamble(index: u8, total: u8) -> [u8; PREAMBLE_LEN] {
@@ -423,6 +493,7 @@ impl ClientCertVerifier for Ed25519PeerVerifier {
 struct QuicWriter {
     stream: Option<SendStream>,
     linger: Duration,
+    drainer: Drainer,
 }
 
 impl QuicWriter {
@@ -467,7 +538,7 @@ impl Drop for QuicWriter {
             }
         };
         let linger = self.linger;
-        rt.spawn(async move {
+        let task = rt.spawn(async move {
             // ClosedStream here means the caller already finished (shutdown) or the
             // stream was reset; both are expected, and stopped() below still applies.
             if let Err(e) = stream.finish() {
@@ -480,6 +551,8 @@ impl Drop for QuicWriter {
                 Err(_) => tracing::debug!(?linger, "quic: linger expired before stream data was acknowledged"),
             }
         });
+        // Registered so Transport::drain can wait for it before the process exits.
+        self.drainer.add_linger(task);
     }
 }
 

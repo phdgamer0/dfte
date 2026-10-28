@@ -481,3 +481,49 @@ async fn quic_tls_identity_must_be_the_engine_identity() {
     assert!(matches!(r, Err(EngineError::AuthenticationFailed)), "{r:?}");
     assert!(!d.out.join("f.bin").exists());
 }
+
+// --- hash cache ----------------------------------------------------------------
+
+/// A re-send of an unchanged file reuses the cached hashes (no hashing pass) and
+/// still delivers identical bytes.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn hash_cache_skips_rehash_on_resend() {
+    let d = dirs();
+    let f = d.src.join("f.bin");
+    std::fs::write(&f, data(3 * CHUNK_SIZE + 99, 11)).unwrap();
+    let cache = d.src.parent().unwrap().join("hash-cache");
+    let mut first = send_opts(2, Arc::new(TrustAny));
+    first.hash_cache_dir = Some(cache.clone());
+    let (s, r) = run_pair(&d, vec![f.clone()], first, recv_opts(Arc::new(TrustAny)), None).await;
+    s.unwrap();
+    r.unwrap();
+    assert_eq!(std::fs::read_dir(&cache).unwrap().count(), 1, "one cache entry written");
+
+    std::fs::remove_dir_all(&d.out).unwrap();
+    let mut again = send_opts(2, Arc::new(TrustAny));
+    again.hash_cache_dir = Some(cache);
+    let (s, r) = run_pair(&d, vec![f.clone()], again, recv_opts(Arc::new(TrustAny)), None).await;
+    let (s, _r) = (s.unwrap(), r.unwrap());
+    assert_eq!(hash_file_blocking(d.out.join("f.bin")).unwrap(), hash_file_blocking(&f).unwrap());
+    // Without the cache this pass reads the whole file; with it there's nothing to read.
+    assert!(s.timings.hash_secs < 0.05, "hash phase took {}s with a warm cache", s.timings.hash_secs);
+}
+
+/// A forged cache entry (wrong hashes for an unchanged file) must make the
+/// transfer fail; it must never deliver a file (manual §20).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn forged_hash_cache_entry_fails_safely() {
+    let d = dirs();
+    let f = d.src.join("f.bin");
+    std::fs::write(&f, data(2 * CHUNK_SIZE + 5, 12)).unwrap();
+    let cache_dir = d.src.parent().unwrap().join("hash-cache");
+    let cache = storage::HashCache::open_blocking(&cache_dir).unwrap();
+    let meta = std::fs::metadata(&f).unwrap();
+    cache.put_blocking(&f, &meta, &[0xAB; 32], &[[0xCD; 32]; 3]).unwrap();
+    let mut sopts = send_opts(1, Arc::new(TrustAny));
+    sopts.hash_cache_dir = Some(cache_dir);
+    let (s, r) = run_pair(&d, vec![f], sopts, recv_opts(Arc::new(TrustAny)), None).await;
+    assert!(s.is_err(), "sender must fail: {s:?}");
+    assert!(r.is_err(), "receiver must fail: {r:?}");
+    assert!(!d.out.join("f.bin").exists(), "a file must never be delivered under forged hashes");
+}

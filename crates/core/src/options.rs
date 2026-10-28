@@ -169,6 +169,9 @@ pub struct SendOptions {
     pub finalize_timeout: Duration,
     /// Threads for the pre-manifest BLAKE3 pass (0 = all cores).
     pub hash_threads: usize,
+    /// Directory for [`storage::HashCache`]: unchanged files are not re-hashed
+    /// on re-send or resume. `None` (default) hashes every file every time.
+    pub hash_cache_dir: Option<std::path::PathBuf>,
     /// Benchmark-only: ask the peer to skip data-stream AEAD (manual §30 #2).
     #[cfg(feature = "bench-insecure-plaintext")]
     pub insecure_plaintext: bool,
@@ -183,6 +186,7 @@ impl SendOptions {
             ack_timeout: Duration::from_secs(30),
             finalize_timeout: Duration::from_secs(600),
             hash_threads: 0,
+            hash_cache_dir: None,
             #[cfg(feature = "bench-insecure-plaintext")]
             insecure_plaintext: false,
         }

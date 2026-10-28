@@ -60,7 +60,19 @@ pub async fn send_files<T: Transport>(transport: &T, addr: SocketAddr, paths: &[
 
     let owned = paths.to_vec();
     let threads = opts.hash_threads;
-    let source = tokio::task::spawn_blocking(move || build_source_blocking(&owned, threads)).await??;
+    let cache_dir = opts.hash_cache_dir.clone();
+    let source = tokio::task::spawn_blocking(move || {
+        // The cache only saves time; if it can't be opened, hash as usual and say so.
+        let cache = cache_dir.and_then(|d| match storage::HashCache::open_blocking(&d) {
+            Ok(c) => Some(c),
+            Err(e) => {
+                tracing::warn!(dir = %d.display(), error = %e, "hash cache unavailable, hashing every file");
+                None
+            }
+        });
+        build_source_blocking(&owned, threads, cache.as_ref())
+    })
+    .await??;
     timings.hash_secs = secs(started.elapsed());
     tracing::debug!(files = source.manifest.files.len(), bytes = source.manifest.total_bytes(), "hashed sources");
 

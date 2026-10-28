@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use protocol::manifest::{FileEntry, Manifest, validate_relative_path};
-use storage::{ChunkReader, hash_file_parallel_blocking};
+use storage::{ChunkReader, HashCache, hash_file_parallel_blocking};
 
 use crate::error::{EngineError, Result};
 
@@ -96,7 +96,7 @@ fn collect_blocking(paths: &[PathBuf]) -> Result<Vec<Entry>> {
 /// Walks `paths`, BLAKE3-hashes every file (keeping per-chunk hashes) and builds
 /// the manifest. Runs before the manifest is offered, so a resume can be matched
 /// on `content_hash` (manual §19).
-pub(crate) fn build_source_blocking(paths: &[PathBuf], threads: usize) -> Result<Source> {
+pub(crate) fn build_source_blocking(paths: &[PathBuf], threads: usize, cache: Option<&HashCache>) -> Result<Source> {
     let entries = collect_blocking(paths)?;
     let threads = if threads == 0 { std::thread::available_parallelism().map_or(1, usize::from) } else { threads };
     let mut files = Vec::with_capacity(entries.len());
@@ -111,7 +111,20 @@ pub(crate) fn build_source_blocking(paths: &[PathBuf], threads: usize) -> Result
         let size = meta.len();
         // `modified()` is unsupported on some platforms; then only size guards changes.
         let modified = meta.modified().ok();
-        let (root, pieces) = hash_file_parallel_blocking(&path, threads)?;
+        let (root, pieces) = match cache.and_then(|c| c.get_blocking(&path, &meta)) {
+            Some(hit) => (hit.root, hit.pieces),
+            None => {
+                let (root, pieces) = hash_file_parallel_blocking(&path, threads)?;
+                if let Some(c) = cache
+                    && let Err(e) = c.put_blocking(&path, &meta, &root, &pieces)
+                {
+                    // The hashes are already correct for this send; failing to cache them
+                    // only means the next send hashes again.
+                    tracing::warn!(path = %path.display(), error = %e, "could not update hash cache");
+                }
+                (root, pieces)
+            }
+        };
         if pieces.len() as u64 != storage::chunk_count(size).max(1) {
             return Err(EngineError::SourceFileChanged { path });
         }
@@ -202,7 +215,7 @@ mod tests {
         std::fs::create_dir_all(root.join("sub/empty")).unwrap();
         std::fs::write(root.join("a.txt"), b"a").unwrap();
         std::fs::write(root.join("sub/b.txt"), b"bb").unwrap();
-        let src = build_source_blocking(&[root], 2).unwrap();
+        let src = build_source_blocking(&[root], 2, None).unwrap();
         let paths: Vec<_> = src.manifest.files.iter().map(|f| (f.relative_path.as_str(), f.is_dir)).collect();
         assert_eq!(paths, vec![("top/a.txt", false), ("top/sub/b.txt", false), ("top/sub/empty", true)]);
         assert_eq!(src.files[1].size, 2);
@@ -211,6 +224,6 @@ mod tests {
     #[test]
     fn missing_source_is_reported() {
         let d = tempfile::tempdir().unwrap();
-        assert!(matches!(build_source_blocking(&[d.path().join("nope")], 1), Err(EngineError::SourceFileMissing { .. })));
+        assert!(matches!(build_source_blocking(&[d.path().join("nope")], 1, None), Err(EngineError::SourceFileMissing { .. })));
     }
 }

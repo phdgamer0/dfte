@@ -8,6 +8,12 @@ on:
     - cron: "0 3 * * *"
   workflow_dispatch:
 
+# Every `run:` step fails on any error, unset variable, or failure inside a
+# pipeline (e.g. `cargo ... | tee`), so no error is swallowed.
+defaults:
+  run:
+    shell: bash --noprofile --norc -euo pipefail {0}
+
 jobs:
   fuzz:
     runs-on: ubuntu-latest

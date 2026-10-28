@@ -356,6 +356,13 @@ async fn run(mut sc: SecureConnection, staging: PathBuf, dest: Dest<'_>, opts: &
         xfer.check_incoming(MsgType::ManifestOffer)?;
         xfer.on_event(TransferEvent::OfferReceived)?;
         tracing::Span::current().record("transfer_id", tracing::field::display(manifest.transfer_id));
+        if let Some(hook) = &opts.on_manifest {
+            // Before prepare_blocking: a declined offer leaves no trace on disk.
+            let (hook, m) = (hook.clone(), manifest.clone());
+            if !tokio::task::spawn_blocking(move || (hook.0)(&m)).await? {
+                return Err(EngineError::Cancelled);
+            }
+        }
         let m = manifest.clone();
         let dest = match dest {
             Dest::Fixed(d) => d.to_path_buf(),

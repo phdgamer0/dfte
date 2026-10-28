@@ -721,6 +721,27 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9e9de72ce2ad1f90dc62fa25f0f430ef85eb4b0d8fa0be4f30373bc40a21d28e"
 
 [[package]]
+name = "dfte-cli"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "dfte-core",
+ "discovery",
+ "qrcode",
+ "rustix",
+ "serde",
+ "serde_json",
+ "storage",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "transport",
+ "zeroize",
+]
+
+[[package]]
 name = "dfte-core"
 version = "0.1.0"
 dependencies = [
@@ -1397,6 +1418,12 @@ dependencies = [
  "thiserror",
  "uuid",
 ]
+
+[[package]]
+name = "qrcode"
+version = "0.14.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d68782463e408eb1e668cf6152704bd856c78c5b6417adaee3203d8f4c1fc9ec"
 
 [[package]]
 name = "quick-error"

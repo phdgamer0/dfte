@@ -428,3 +428,56 @@ async fn transport_identity_must_match_noise_identity() {
     // The responder sees the session torn down rather than established-and-used.
     let _responder = rx.await.unwrap();
 }
+
+// --- QUIC backend ------------------------------------------------------------
+
+fn quic(id: &DeviceIdentity) -> transport::QuicTransport {
+    transport::QuicTransport::new(id, transport::QuicConfig::default()).unwrap()
+}
+
+/// The same encrypted, multi-file transfer over QUIC. Each side's TLS identity is
+/// its engine identity, so the engine's TLS-vs-Noise identity check passes.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn quic_encrypted_multi_file_round_trip() {
+    let d = dirs();
+    let (dir, single) = build_tree(&d.src);
+    let sopts = send_opts(4, Arc::new(TrustAny));
+    let ropts = recv_opts(Arc::new(TrustAny));
+    let (sender_fp, receiver_fp) = (sopts.common.identity.fingerprint(), ropts.common.identity.fingerprint());
+    let mut l = quic(&ropts.common.identity).listen("127.0.0.1:0".parse().unwrap()).await.unwrap();
+    let addr = l.local_addr().unwrap();
+    let (staging, out) = (d.staging.clone(), d.out.clone());
+    let rx = tokio::spawn(async move { receive(&mut l, &staging, &out, &ropts).await });
+    let st = quic(&sopts.common.identity);
+    let s = tokio::time::timeout(Duration::from_secs(120), send_files(&st, addr, &[dir, single], &sopts)).await.expect("sender hung").unwrap();
+    let r = tokio::time::timeout(Duration::from_secs(120), rx).await.expect("receiver hung").unwrap().unwrap();
+    check_tree(&d);
+    assert_eq!((s.transport.as_str(), r.transport.as_str()), ("quic", "quic"));
+    assert_ne!(s.cipher, "plaintext");
+    assert_eq!(s.streams, 4);
+    assert_eq!(s.bytes_transferred, s.bytes_total);
+    assert_eq!(s.peer_fingerprint, receiver_fp);
+    assert_eq!(r.peer_fingerprint, sender_fp);
+}
+
+/// A QUIC endpoint whose TLS identity differs from the engine identity is
+/// rejected by the engine's identity cross-check (manual §12.1).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn quic_tls_identity_must_be_the_engine_identity() {
+    let d = dirs();
+    let f = d.src.join("f.bin");
+    std::fs::write(&f, data(MIB, 3)).unwrap();
+    let ropts = recv_opts(Arc::new(TrustAny));
+    let mut l = quic(&ropts.common.identity).listen("127.0.0.1:0".parse().unwrap()).await.unwrap();
+    let addr = l.local_addr().unwrap();
+    let (staging, out) = (d.staging.clone(), d.out.clone());
+    let rx = tokio::spawn(async move { receive(&mut l, &staging, &out, &ropts).await });
+    let sopts = send_opts(1, Arc::new(TrustAny));
+    // The sender's TLS certificate belongs to a different key than its Noise identity.
+    let impostor = DeviceIdentity::generate().unwrap();
+    let s = send_files(&quic(&impostor), addr, &[f], &sopts).await;
+    assert!(s.is_err(), "sender must not succeed: {s:?}");
+    let r = tokio::time::timeout(Duration::from_secs(60), rx).await.expect("receiver hung").unwrap();
+    assert!(matches!(r, Err(EngineError::AuthenticationFailed)), "{r:?}");
+    assert!(!d.out.join("f.bin").exists());
+}

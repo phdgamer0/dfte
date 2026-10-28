@@ -32,6 +32,20 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Plaintext bench mode stays out of app crates (manual §13, §30 #2)
+        run: |
+          # Feature unification enables bench-insecure-plaintext in workspace
+          # builds via crates/bench; app crates built on their own must not get it.
+          for c in dfte-core platform-ffi; do
+            tree=$(cargo tree -q -p "$c" -e features)
+            if grep -q 'bench-insecure-plaintext' <<<"$tree"; then
+              echo "::error::$c pulls in bench-insecure-plaintext"
+              exit 1
+            fi
+          done
+          # Positive control: the guard must still detect the feature where it is enabled.
+          tree=$(cargo tree -q -p bench -e features)
+          grep -q 'bench-insecure-plaintext' <<<"$tree" || { echo "::error::guard self-check failed: feature not found in bench"; exit 1; }
       # Linux wpa_supplicant/zbus backend is feature-gated (manual §5 Linux); keep it compiling.
       - run: cargo clippy -p discovery --all-targets --features linux-wpa -- -D warnings
       - run: cargo test -p discovery --features linux-wpa

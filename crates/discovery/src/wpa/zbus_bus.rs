@@ -11,8 +11,8 @@ use std::collections::HashMap;
 use futures_util::StreamExt as _;
 use tokio::sync::mpsc;
 use zbus::proxy::CacheProperties;
-use zbus::zvariant::{ObjectPath, OwnedObjectPath, OwnedValue, Value};
 use zbus::{Connection, Proxy};
+use zbus::{ObjectPath, OwnedObjectPath, OwnedVariant, Variant};
 
 use super::{GroupStarted, P2pBus, P2pSignal, PeerProperties};
 use crate::{DiscoveryError, Permission, Result};
@@ -24,6 +24,11 @@ const P2P_IFACE: &str = "fi.w1.wpa_supplicant1.Interface.P2PDevice";
 const PEER_IFACE: &str = "fi.w1.wpa_supplicant1.Peer";
 
 fn map_err(e: zbus::Error) -> DiscoveryError {
+    // zbus 6 lifts well-known org.freedesktop.DBus errors into `Error::FDO`.
+    let e = match e {
+        zbus::Error::FDO(fdo) => return map_fdo(*fdo),
+        other => other,
+    };
     if let zbus::Error::MethodError(name, _, _) = &e {
         match name.as_str() {
             "org.freedesktop.DBus.Error.AccessDenied" => return DiscoveryError::PermissionDenied(Permission::WifiControl),
@@ -69,12 +74,12 @@ impl ZbusP2pBus {
 }
 
 async fn proxy<'a>(conn: &Connection, path: &'a str, interface: &'a str) -> Result<Proxy<'a>> {
-    zbus::proxy::Builder::new(conn).destination(DEST).and_then(|b| b.path(path)).and_then(|b| b.interface(interface)).map_err(map_err)?.cache_properties(CacheProperties::No).build().await.map_err(map_err)
+    zbus::proxy::Builder::new(conn).destination(DEST).path(path).interface(interface).cache_properties(CacheProperties::No).build().await.map_err(map_err)
 }
 
 /// Remove and convert one property. Absent → `None`; present with the wrong D-Bus type →
 /// `None` plus a warning (a malformed property is dropped on purpose, never trusted).
-fn take<T: TryFrom<OwnedValue>>(props: &mut HashMap<String, OwnedValue>, key: &str) -> Option<T>
+fn take<T: TryFrom<OwnedVariant>>(props: &mut HashMap<String, OwnedVariant>, key: &str) -> Option<T>
 where
     T::Error: std::fmt::Display,
 {
@@ -111,7 +116,7 @@ fn parse_signal(msg: &zbus::Message) -> Option<P2pSignal> {
         "DeviceFound" => P2pSignal::DeviceFound(body::<(OwnedObjectPath,)>(msg, m)?.0.to_string()),
         "DeviceLost" => P2pSignal::DeviceLost(body::<(OwnedObjectPath,)>(msg, m)?.0.to_string()),
         "GroupStarted" => {
-            let (mut p,) = body::<(HashMap<String, OwnedValue>,)>(msg, m)?;
+            let (mut p,) = body::<(HashMap<String, OwnedVariant>,)>(msg, m)?;
             let Some(interface_object) = take::<OwnedObjectPath>(&mut p, "interface_object") else {
                 tracing::warn!("dropping GroupStarted without interface_object");
                 return None;
@@ -123,7 +128,7 @@ fn parse_signal(msg: &zbus::Message) -> Option<P2pSignal> {
             P2pSignal::GroupStarted(GroupStarted { interface_object: interface_object.to_string(), role, ip_addr: take::<Vec<u8>>(&mut p, "IpAddr"), ip_addr_go: take::<Vec<u8>>(&mut p, "IpAddrGo") })
         }
         "GONegotiationFailure" => {
-            let (mut p,) = body::<(HashMap<String, OwnedValue>,)>(msg, m)?;
+            let (mut p,) = body::<(HashMap<String, OwnedVariant>,)>(msg, m)?;
             // The failure itself is what matters; a missing status code (logged by `take`
             // only when mistyped) is reported as -1, i.e. "unknown", never as a success.
             P2pSignal::GoNegotiationFailure(take::<i32>(&mut p, "status").unwrap_or(-1))
@@ -137,7 +142,7 @@ fn parse_signal(msg: &zbus::Message) -> Option<P2pSignal> {
 
 impl P2pBus for ZbusP2pBus {
     async fn set_device_name(&self, name: &str) -> Result<()> {
-        let cfg: HashMap<&str, Value<'_>> = HashMap::from([("DeviceName", Value::from(name))]);
+        let cfg: HashMap<&str, Variant<'_>> = HashMap::from([("DeviceName", Variant::from(name))]);
         self.p2p().await?.set_property("P2PDeviceConfig", cfg).await.map_err(map_fdo)
     }
 
@@ -146,7 +151,7 @@ impl P2pBus for ZbusP2pBus {
     }
 
     async fn find(&self, timeout_secs: i32) -> Result<()> {
-        let args: HashMap<&str, Value<'_>> = HashMap::from([("Timeout", Value::from(timeout_secs))]);
+        let args: HashMap<&str, Variant<'_>> = HashMap::from([("Timeout", Variant::from(timeout_secs))]);
         self.p2p().await?.call::<_, _, ()>("Find", &(args,)).await.map_err(map_err)
     }
 
@@ -156,7 +161,7 @@ impl P2pBus for ZbusP2pBus {
 
     async fn connect_pbc(&self, peer_path: &str, go_intent: i32) -> Result<()> {
         let peer = ObjectPath::try_from(peer_path).map_err(|e| DiscoveryError::Backend(e.to_string()))?;
-        let args: HashMap<&str, Value<'_>> = HashMap::from([("peer", Value::from(peer)), ("wps_method", Value::from("pbc")), ("go_intent", Value::from(go_intent)), ("join", Value::from(false)), ("persistent", Value::from(false))]);
+        let args: HashMap<&str, Variant<'_>> = HashMap::from([("peer", Variant::from(peer)), ("wps_method", Variant::from("pbc")), ("go_intent", Variant::from(go_intent)), ("join", Variant::from(false)), ("persistent", Variant::from(false))]);
         // Returns the generated PIN, meaningless for PBC.
         self.p2p().await?.call::<_, _, String>("Connect", &(args,)).await.map(drop).map_err(map_err)
     }
@@ -178,7 +183,7 @@ impl P2pBus for ZbusP2pBus {
 
     async fn subscribe(&self) -> Result<mpsc::Receiver<P2pSignal>> {
         // A 'static proxy (owned path) so the forwarding task can own the signal stream.
-        let p2p: Proxy<'static> = zbus::proxy::Builder::new(&self.conn).destination(DEST).and_then(|b| b.path(self.iface_path.clone())).and_then(|b| b.interface(P2P_IFACE)).map_err(map_err)?.cache_properties(CacheProperties::No).build().await.map_err(map_err)?;
+        let p2p: Proxy<'static> = zbus::proxy::Builder::new(&self.conn).destination(DEST).path(self.iface_path.clone()).interface(P2P_IFACE).cache_properties(CacheProperties::No).build().await.map_err(map_err)?;
         let mut signals = p2p.receive_all_signals().await.map_err(map_err)?;
         let (tx, rx) = mpsc::channel(crate::PEER_STREAM_CAPACITY);
         tokio::spawn(async move {
@@ -209,7 +214,16 @@ mod tests {
     use super::*;
 
     fn signal<B: zbus::export::serde::Serialize + zbus::zvariant::DynamicType>(member: &str, body: &B) -> zbus::Message {
-        zbus::Message::signal("/fi/w1/wpa_supplicant1/Interfaces/1", P2P_IFACE, member).unwrap().build(body).unwrap()
+        zbus::Message::signal("/fi/w1/wpa_supplicant1/Interfaces/1", P2P_IFACE, member).build(body).unwrap()
+    }
+
+    #[test]
+    fn bus_errors_map_to_discovery_errors() {
+        let denied = map_err(zbus::Error::FDO(Box::new(zbus::fdo::Error::AccessDenied("no".into()))));
+        assert!(matches!(denied, DiscoveryError::PermissionDenied(Permission::WifiControl)));
+        let gone = map_err(zbus::Error::FDO(Box::new(zbus::fdo::Error::ServiceUnknown("no".into()))));
+        assert!(matches!(gone, DiscoveryError::RadioUnavailable(_)));
+        assert!(matches!(map_err(zbus::Error::Failure("x".into())), DiscoveryError::Backend(_)));
     }
 
     #[test]
@@ -217,7 +231,7 @@ mod tests {
         let path = ObjectPath::try_from("/fi/w1/wpa_supplicant1/Interfaces/1/Peers/aabbccddeeff").unwrap();
         assert_eq!(parse_signal(&signal("DeviceFound", &(path.clone(),))), Some(P2pSignal::DeviceFound(path.to_string())));
         assert_eq!(parse_signal(&signal("DeviceLost", &(path.clone(),))), Some(P2pSignal::DeviceLost(path.to_string())));
-        assert_eq!(parse_signal(&signal("GroupFinished", &(HashMap::<&str, Value<'_>>::new(),))), Some(P2pSignal::GroupFinished));
+        assert_eq!(parse_signal(&signal("GroupFinished", &(HashMap::<&str, Variant<'_>>::new(),))), Some(P2pSignal::GroupFinished));
         assert_eq!(parse_signal(&signal("GroupFormationFailure", &("WpsFail",))), Some(P2pSignal::GroupFormationFailure("WpsFail".into())));
         assert_eq!(parse_signal(&signal("SomethingElse", &())), None);
         // Wrong body type: ignored, not a panic.
@@ -227,14 +241,14 @@ mod tests {
     #[test]
     fn parses_group_started_and_negotiation_failure() {
         let iface = ObjectPath::try_from("/fi/w1/wpa_supplicant1/Interfaces/2").unwrap();
-        let props: HashMap<&str, Value<'_>> = HashMap::from([("interface_object", Value::from(iface.clone())), ("role", Value::from("client")), ("group_object", Value::from(ObjectPath::try_from("/fi/w1/wpa_supplicant1/Interfaces/2/Groups/x").unwrap())), ("IpAddr", Value::from(vec![192u8, 168, 49, 23])), ("IpAddrGo", Value::from(vec![192u8, 168, 49, 1]))]);
+        let props: HashMap<&str, Variant<'_>> = HashMap::from([("interface_object", Variant::from(iface.clone())), ("role", Variant::from("client")), ("group_object", Variant::from(ObjectPath::try_from("/fi/w1/wpa_supplicant1/Interfaces/2/Groups/x").unwrap())), ("IpAddr", Variant::from(vec![192u8, 168, 49, 23])), ("IpAddrGo", Variant::from(vec![192u8, 168, 49, 1]))]);
         let Some(P2pSignal::GroupStarted(g)) = parse_signal(&signal("GroupStarted", &(props,))) else { panic!() };
         assert_eq!(g, GroupStarted { interface_object: iface.to_string(), role: "client".into(), ip_addr: Some(vec![192, 168, 49, 23]), ip_addr_go: Some(vec![192, 168, 49, 1]) });
 
-        let fail: HashMap<&str, Value<'_>> = HashMap::from([("status", Value::from(11i32))]);
+        let fail: HashMap<&str, Variant<'_>> = HashMap::from([("status", Variant::from(11i32))]);
         assert_eq!(parse_signal(&signal("GONegotiationFailure", &(fail,))), Some(P2pSignal::GoNegotiationFailure(11)));
         // GroupStarted without an interface object is unusable: dropped.
-        let empty: HashMap<&str, Value<'_>> = HashMap::new();
+        let empty: HashMap<&str, Variant<'_>> = HashMap::new();
         assert_eq!(parse_signal(&signal("GroupStarted", &(empty,))), None);
     }
 }

@@ -56,7 +56,7 @@ criterion = "0.8"
 serde_bytes = "0.11"
 base64 = "0.22"
 socket2 = { version = "0.6", features = ["all"] }
-zbus = { version = "5", default-features = false, features = ["tokio"] }
+zbus = { version = "6", default-features = false, features = ["tokio", "proxy"] }
 futures-util = { version = "0.3", default-features = false }
 
 [profile.release]

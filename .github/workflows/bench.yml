@@ -8,6 +8,12 @@ on:
   pull_request:
   workflow_dispatch:
 
+# Every `run:` step fails on any error, unset variable, or failure inside a
+# pipeline (e.g. `cargo ... | tee`), so no error is swallowed.
+defaults:
+  run:
+    shell: bash --noprofile --norc -euo pipefail {0}
+
 concurrency:
   group: bench-${{ github.ref }}
   cancel-in-progress: true
@@ -29,9 +35,6 @@ jobs:
           key: criterion-main-${{ github.sha }}
           restore-keys: criterion-main-
       - name: Run benches
-        # Explicit `shell: bash` runs with -eo pipefail, so a failing bench
-        # isn't hidden by `tee`.
-        shell: bash
         run: |
           if [ "${{ github.event_name }}" = "pull_request" ] && [ -d target/criterion ]; then
             ARGS="--baseline main"
@@ -47,7 +50,6 @@ jobs:
           key: criterion-main-${{ github.sha }}
       - name: Summary
         if: always()
-        shell: bash
         run: |
           {
             echo "### Benchmark results"

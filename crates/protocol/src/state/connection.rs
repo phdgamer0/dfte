@@ -79,7 +79,8 @@ impl Connection {
         let ok = match (&self.state, self.role) {
             (ConnState::Init, Role::Responder) => msg == MsgType::Hello,
             (ConnState::WaitHelloAck, Role::Initiator) => msg == MsgType::HelloAck,
-            (ConnState::Established, _) => !matches!(msg, MsgType::Hello | MsgType::HelloAck),
+            (ConnState::Handshaking, _) => matches!(msg, MsgType::Handshake | MsgType::Close),
+            (ConnState::Established, _) => !matches!(msg, MsgType::Hello | MsgType::HelloAck | MsgType::Handshake),
             _ => msg == MsgType::Close,
         };
         if ok { Ok(()) } else { Err(ProtocolError::UnexpectedMessage) }
@@ -144,8 +145,14 @@ mod tests {
         let c = Connection::new(Role::Responder);
         assert!(c.check_incoming(MsgType::Hello).is_ok());
         assert!(c.check_incoming(MsgType::ChunkData).is_err());
+        assert!(c.check_incoming(MsgType::Handshake).is_err());
+        let mut c = Connection::new(Role::Responder);
+        c.on_event(ConnEvent::HelloReceived).unwrap();
+        assert!(c.check_incoming(MsgType::Handshake).is_ok());
+        assert!(c.check_incoming(MsgType::ManifestOffer).is_err());
         let c = establish(Role::Initiator);
         assert!(c.check_incoming(MsgType::Hello).is_err());
+        assert!(c.check_incoming(MsgType::Handshake).is_err());
         assert!(c.check_incoming(MsgType::ChunkAck).is_ok());
     }
 }

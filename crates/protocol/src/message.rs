@@ -12,6 +12,11 @@ pub mod caps {
     pub const TRANSPORT_TCP: u64 = 1 << 0;
     pub const TRANSPORT_QUIC: u64 = 1 << 1;
     pub const COMPRESSION_ZSTD: u64 = 1 << 2;
+    /// Benchmark-only (manual §30 #2): data-stream bodies are sent without AEAD.
+    /// Only builds with core's non-default `bench-insecure-plaintext` feature ever
+    /// advertise it, and it takes effect only when *both* peers do. The control
+    /// stream stays sealed. Never set in production builds.
+    pub const BENCH_INSECURE_PLAINTEXT: u64 = 1 << 63;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -21,17 +26,26 @@ pub struct Hello {
     /// Parallel streams the sender would like to use (manual §11: 1-4).
     pub streams: u8,
     pub device_name: String,
+    /// AEAD suite ids in local preference order (crypto `CipherSuite::id`). Additive
+    /// field: absent in older encodings, so it defaults to empty.
+    #[serde(default)]
+    pub ciphers: Vec<u8>,
 }
 
 impl Hello {
     pub fn new(capabilities: u64, streams: u8, device_name: impl Into<String>) -> Self {
-        Self { versions: (MIN_PROTOCOL_VERSION..=PROTOCOL_VERSION).collect(), capabilities, streams, device_name: device_name.into() }
+        Self { versions: (MIN_PROTOCOL_VERSION..=PROTOCOL_VERSION).collect(), capabilities, streams, device_name: device_name.into(), ciphers: Vec::new() }
+    }
+
+    pub fn with_ciphers(mut self, ciphers: Vec<u8>) -> Self {
+        self.ciphers = ciphers;
+        self
     }
 
     /// Responder side: picks the highest common version and intersects capabilities.
     pub fn accept(&self, local_caps: u64, max_streams: u8, device_name: &str) -> Result<HelloAck> {
         let version = self.versions.iter().copied().filter(|v| (MIN_PROTOCOL_VERSION..=PROTOCOL_VERSION).contains(v)).max().ok_or(ProtocolError::NoCommonVersion)?;
-        Ok(HelloAck { version, capabilities: self.capabilities & local_caps, streams: self.streams.clamp(1, max_streams.max(1)), device_name: device_name.to_owned() })
+        Ok(HelloAck { version, capabilities: self.capabilities & local_caps, streams: self.streams.clamp(1, max_streams.max(1)), device_name: device_name.to_owned(), ciphers: Vec::new() })
     }
 }
 
@@ -41,6 +55,10 @@ pub struct HelloAck {
     pub capabilities: u64,
     pub streams: u8,
     pub device_name: String,
+    /// Responder's AEAD preference list; both sides run the same symmetric
+    /// negotiation over the two lists (see [`Hello::ciphers`]).
+    #[serde(default)]
+    pub ciphers: Vec<u8>,
 }
 
 /// Integrity confirmation for one reassembled chunk (manual §10/§20).
@@ -72,6 +90,8 @@ pub enum CloseReason {
     ProtocolViolation,
     AuthenticationFailed,
     IntegrityFailure,
+    /// Receiver cannot store the offered files (manual §18 free-space check).
+    InsufficientSpace,
 }
 
 /// Fixed sub-header at the front of every ChunkData body, so the data plane
@@ -101,6 +121,8 @@ impl ChunkHeader {
 pub enum Message<'a> {
     Hello(Hello),
     HelloAck(HelloAck),
+    /// Opaque Noise handshake message (manual §12.1).
+    Handshake(&'a [u8]),
     ChunkData { chunk: ChunkHeader, data: &'a [u8] },
     ChunkAck(ChunkAck),
     SelectiveNack(SelectiveNack),
@@ -117,6 +139,7 @@ impl Message<'_> {
         match self {
             Message::Hello(_) => MsgType::Hello,
             Message::HelloAck(_) => MsgType::HelloAck,
+            Message::Handshake(_) => MsgType::Handshake,
             Message::ChunkData { .. } => MsgType::ChunkData,
             Message::ChunkAck(_) => MsgType::ChunkAck,
             Message::SelectiveNack(_) => MsgType::SelectiveNack,
@@ -135,6 +158,10 @@ impl Message<'_> {
         match self {
             Message::Hello(m) => encode_rmp(m, out),
             Message::HelloAck(m) => encode_rmp(m, out),
+            Message::Handshake(b) => {
+                out.extend_from_slice(b);
+                Ok(())
+            }
             Message::ChunkData { chunk, data } => {
                 let mut h = [0u8; CHUNK_HEADER_LEN];
                 chunk.encode(&mut h);
@@ -165,6 +192,7 @@ impl<'a> Message<'a> {
         Ok(match msg_type {
             MsgType::Hello => Message::Hello(decode_rmp(body)?),
             MsgType::HelloAck => Message::HelloAck(decode_rmp(body)?),
+            MsgType::Handshake => Message::Handshake(body),
             MsgType::ChunkData => Message::ChunkData { chunk: ChunkHeader::decode(body)?, data: &body[CHUNK_HEADER_LEN..] },
             MsgType::ChunkAck => Message::ChunkAck(decode_rmp(body)?),
             MsgType::SelectiveNack => Message::SelectiveNack(decode_rmp(body)?),
@@ -213,6 +241,34 @@ mod tests {
 
         let future = Hello { versions: vec![99], ..hello };
         assert_eq!(future.accept(0, 1, "b"), Err(ProtocolError::NoCommonVersion));
+    }
+
+    #[test]
+    fn ciphers_field_is_additive() {
+        // An encoding from before `ciphers` existed still decodes, with an empty list.
+        #[derive(Serialize)]
+        struct OldHello {
+            versions: Vec<u16>,
+            capabilities: u64,
+            streams: u8,
+            device_name: String,
+        }
+        let mut body = Vec::new();
+        encode_rmp(&OldHello { versions: vec![PROTOCOL_VERSION], capabilities: 1, streams: 2, device_name: "x".into() }, &mut body).unwrap();
+        let Message::Hello(h) = Message::decode(MsgType::Hello, &body).unwrap() else { panic!() };
+        assert!(h.ciphers.is_empty());
+
+        let h = Hello::new(0, 1, "a").with_ciphers(vec![2, 1]);
+        let mut body = Vec::new();
+        Message::Hello(h.clone()).encode_body(&mut body).unwrap();
+        assert_eq!(Message::decode(MsgType::Hello, &body).unwrap(), Message::Hello(h));
+    }
+
+    #[test]
+    fn handshake_body_is_opaque() {
+        let mut body = Vec::new();
+        Message::Handshake(b"noise").encode_body(&mut body).unwrap();
+        assert_eq!(Message::decode(MsgType::Handshake, &body).unwrap(), Message::Handshake(b"noise"));
     }
 
     #[test]

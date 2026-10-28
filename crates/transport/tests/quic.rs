@@ -160,3 +160,38 @@ async fn client_without_identity_does_not_break_listener() {
     let accepted = tokio::time::timeout(Duration::from_secs(5), server).await.unwrap().unwrap();
     assert_eq!(accepted.peer_key, Some(good_id.public_key_bytes()));
 }
+
+/// `drain()` before "process exit": the client lives on its own runtime, writes,
+/// drops its connection, drains, and then the runtime is shut down at once (what
+/// returning from main does). The server must still get every byte and a clean EOF.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn drain_before_runtime_shutdown_delivers_everything() {
+    let mut l = quic(&DeviceIdentity::generate().unwrap()).listen("127.0.0.1:0".parse().unwrap()).await.unwrap();
+    let addr = l.local_addr().unwrap();
+    let body = vec![7u8; 6 << 20];
+    let sent = body.clone();
+    let client = std::thread::spawn(move || {
+        let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().unwrap();
+        rt.block_on(async move {
+            let t = quic(&DeviceIdentity::generate().unwrap());
+            let mut c = t.connect(addr, 1).await.unwrap();
+            c.data[0].writer.write_frame(&Header::new(MsgType::ChunkData, 0, 0, 0, sent.len() as u32), &[&sent]).await.unwrap();
+            drop(c);
+            t.drain().await.unwrap();
+        });
+        rt.shutdown_background();
+    });
+    let mut s = l.accept().await.unwrap();
+    let h = s.data[0].reader.read_header().await.unwrap().unwrap();
+    let mut dst = vec![0u8; body.len()];
+    s.data[0].reader.read_body_into(&h, &mut dst).await.unwrap();
+    assert!(dst == body);
+    assert!(s.data[0].reader.read_header().await.unwrap().is_none());
+    tokio::task::spawn_blocking(move || client.join().unwrap()).await.unwrap();
+}
+
+#[tokio::test]
+async fn drain_with_nothing_pending_is_immediate() {
+    let t = quic(&DeviceIdentity::generate().unwrap());
+    tokio::time::timeout(std::time::Duration::from_secs(1), t.drain()).await.unwrap().unwrap();
+}

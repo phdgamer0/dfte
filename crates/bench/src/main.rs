@@ -10,6 +10,8 @@
 //!   baseline; the default disk mode uses `--dir` (default: current directory),
 //!   where the receiver's fsyncs really hit the disk. In both modes the freshly
 //!   generated source file is in the page cache, so source reads are not disk reads.
+//! - `--transport tcp|quic` on all three: each side's QUIC endpoint uses that
+//!   side's engine identity as its TLS identity (the engine cross-checks them).
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -19,7 +21,7 @@ use std::time::Instant;
 use clap::{Parser, Subcommand, ValueEnum};
 use dfte_core::{DeviceIdentity, PeerAuth, PeerVerifier, ReceiveOptions, SendOptions, TransferReport, TrustAny, receive, send_files};
 use serde::Serialize;
-use transport::{Listener, TcpTransport, Transport};
+use transport::{Listener, QuicConfig, QuicTransport, TcpTransport, Transport};
 
 type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
@@ -55,6 +57,8 @@ enum Cmd {
         trust_any: bool,
         #[arg(long, default_value_t = 16)]
         max_streams: u8,
+        #[arg(long, value_enum, default_value_t = TransportArg::Tcp)]
+        transport: TransportArg,
         /// Agree to unencrypted data streams if the sender asks (bench only).
         #[arg(long)]
         allow_plaintext: bool,
@@ -83,6 +87,8 @@ enum Cmd {
         /// Total bytes, e.g. 1G, 512M, 1048576.
         #[arg(long, value_parser = parse_size)]
         size: u64,
+        #[arg(long, value_enum, default_value_t = TransportArg::Tcp)]
+        transport: TransportArg,
         /// Split `size` across this many files.
         #[arg(long, default_value_t = 1)]
         files: usize,
@@ -179,29 +185,30 @@ async fn main() {
 
 async fn run(cli: Cli) -> Result<(), BoxError> {
     match cli.cmd {
-        Cmd::Recv { listen, staging, out, trust_any, max_streams, allow_plaintext } => {
-            let mut l = TcpTransport::default().listen(listen).await?;
-            eprintln!("listening on {}", l.local_addr()?);
+        Cmd::Recv { listen, staging, out, trust_any, max_streams, transport, allow_plaintext } => {
             let mut opts = ReceiveOptions::new(identity()?, verifier(trust_any));
             opts.max_streams = max_streams;
             opts.allow_insecure_plaintext = allow_plaintext;
             eprintln!("this device: {}", opts.common.identity.fingerprint());
-            let r = receive(&mut l, &staging, &out, &opts).await?;
+            let r = match transport {
+                TransportArg::Tcp => recv_on(&TcpTransport::default(), listen, &staging, &out, &opts).await?,
+                TransportArg::Quic => recv_on(&quic(&opts.common.identity)?, listen, &staging, &out, &opts).await?,
+            };
             emit(cli.json, &r, || print_report(&r))?;
         }
         Cmd::Send { target, files, streams, transport, trust_any, plaintext, in_flight } => {
-            if matches!(transport, TransportArg::Quic) {
-                return Err("the QUIC backend is not available in this build yet".into());
-            }
             let mut opts = SendOptions::new(identity()?, verifier(trust_any));
             opts.streams = streams;
             opts.in_flight_chunks = in_flight;
             opts.insecure_plaintext = plaintext;
             eprintln!("this device: {}", opts.common.identity.fingerprint());
-            let r = send_files(&TcpTransport::default(), target, &files, &opts).await?;
+            let r = match transport {
+                TransportArg::Tcp => send_on(&TcpTransport::default(), target, &files, &opts).await?,
+                TransportArg::Quic => send_on(&quic(&opts.common.identity)?, target, &files, &opts).await?,
+            };
             emit(cli.json, &r, || print_report(&r))?;
         }
-        Cmd::Loopback { size, files, streams, plaintext, in_memory, dir, in_flight, recv_buffers, repeat } => {
+        Cmd::Loopback { size, transport, files, streams, plaintext, in_memory, dir, in_flight, recv_buffers, repeat } => {
             let base = if in_memory { tmpfs_dir()? } else { dir };
             let root = tempfile::Builder::new().prefix("engine-bench-").tempdir_in(&base)?;
             let src = root.path().join("src");
@@ -212,7 +219,7 @@ async fn run(cli: Cli) -> Result<(), BoxError> {
             }
             let mut runs = Vec::new();
             for i in 0..repeat.max(1) {
-                let run = loopback_once(root.path(), i, &paths, streams, plaintext, in_flight, recv_buffers).await?;
+                let run = loopback_once(root.path(), i, transport, &paths, streams, plaintext, in_flight, recv_buffers).await?;
                 if !cli.json {
                     println!("--- run {} ({}, {})", i + 1, if in_memory { "tmpfs" } else { "disk" }, if plaintext { "plaintext" } else { "encrypted" });
                     print_report(&run.sender);
@@ -293,26 +300,74 @@ fn generate(dir: &Path, size: u64, files: usize) -> Result<Vec<PathBuf>, BoxErro
     Ok(out)
 }
 
-async fn loopback_once(root: &Path, i: usize, paths: &[PathBuf], streams: usize, plaintext: bool, in_flight: usize, recv_buffers: usize) -> Result<LoopbackRun, BoxError> {
+#[allow(clippy::too_many_arguments)]
+async fn loopback_once(root: &Path, i: usize, transport: TransportArg, paths: &[PathBuf], streams: usize, plaintext: bool, in_flight: usize, recv_buffers: usize) -> Result<LoopbackRun, BoxError> {
     let staging = root.join(format!("staging-{i}"));
     let out = root.join(format!("out-{i}"));
-    let mut l = TcpTransport::default().listen("127.0.0.1:0".parse()?).await?;
-    let addr = l.local_addr()?;
     let mut ropts = ReceiveOptions::new(identity()?, Arc::new(TrustAny));
     ropts.allow_insecure_plaintext = plaintext;
     ropts.pool_buffers = recv_buffers;
-    let (s2, o2) = (staging.clone(), out.clone());
-    let rx = tokio::spawn(async move { receive(&mut l, &s2, &o2, &ropts).await });
     let mut sopts = SendOptions::new(identity()?, Arc::new(TrustAny));
     sopts.streams = streams;
     sopts.in_flight_chunks = in_flight;
     sopts.insecure_plaintext = plaintext;
-    let sender = send_files(&TcpTransport::default(), addr, paths, &sopts).await?;
-    let receiver = rx.await??;
+    // Each side's QUIC endpoint presents that side's engine identity, which the
+    // engine cross-checks against the Noise handshake.
+    let (sender, receiver) = match transport {
+        TransportArg::Tcp => loopback_pair(&TcpTransport::default(), &TcpTransport::default(), paths, &staging, &out, &sopts, ropts).await?,
+        TransportArg::Quic => loopback_pair(&quic(&sopts.common.identity)?, &quic(&ropts.common.identity)?, paths, &staging, &out, &sopts, ropts).await?,
+    };
     // Free the space before the next repetition.
     std::fs::remove_dir_all(&out)?;
     std::fs::remove_dir_all(&staging)?;
     Ok(LoopbackRun { sender, receiver })
+}
+
+async fn loopback_pair<S: Transport, R: Transport>(send_t: &S, recv_t: &R, paths: &[PathBuf], staging: &Path, out: &Path, sopts: &SendOptions, ropts: ReceiveOptions) -> Result<(TransferReport, TransferReport), BoxError>
+where
+    R::Listener: 'static,
+{
+    let mut l = recv_t.listen("127.0.0.1:0".parse()?).await?;
+    let addr = l.local_addr()?;
+    let (s2, o2) = (staging.to_path_buf(), out.to_path_buf());
+    let rx = tokio::spawn(async move {
+        let r = receive(&mut l, &s2, &o2, &ropts).await;
+        drained("receiver", l.drain().await);
+        r
+    });
+    let sender = send_files(send_t, addr, paths, sopts).await;
+    drained("sender", send_t.drain().await);
+    let receiver = rx.await??;
+    Ok((sender?, receiver))
+}
+
+async fn recv_on<T: Transport>(t: &T, listen: SocketAddr, staging: &Path, out: &Path, opts: &ReceiveOptions) -> Result<TransferReport, BoxError> {
+    let mut l = t.listen(listen).await?;
+    eprintln!("listening on {} ({:?})", l.local_addr()?, t.kind());
+    let r = receive(&mut l, staging, out, opts).await;
+    drained("receiver", l.drain().await);
+    Ok(r?)
+}
+
+async fn send_on<T: Transport>(t: &T, target: SocketAddr, files: &[PathBuf], opts: &SendOptions) -> Result<TransferReport, BoxError> {
+    let r = send_files(t, target, files, opts).await;
+    drained("sender", t.drain().await);
+    Ok(r?)
+}
+
+/// The process is about to exit: let the transport deliver what it still owes
+/// the peer (QUIC retransmits in userspace, see `Transport::drain`). The
+/// transfer's own result is what this side reports; an undelivered tail is
+/// surfaced on stderr, since the peer may then fail.
+fn drained(side: &str, r: transport::Result<()>) {
+    if let Err(e) = r {
+        eprintln!("warning: {side} transport did not drain before exit: {e}; the peer may see the connection drop");
+    }
+}
+
+/// QUIC endpoint whose TLS identity is the engine identity (manual §12.1).
+fn quic(identity: &DeviceIdentity) -> Result<QuicTransport, BoxError> {
+    Ok(QuicTransport::new(identity, QuicConfig::default())?)
 }
 
 #[cfg(test)]

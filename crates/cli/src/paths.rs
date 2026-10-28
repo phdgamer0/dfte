@@ -68,6 +68,9 @@ pub fn parse_user_dirs(text: &str, home: &Path) -> Option<PathBuf> {
 mod tests {
     use super::*;
 
+    // XDG user-dirs is a Linux/BSD convention, and "/home/u" isn't an absolute
+    // path on Windows (no drive), so this only runs on unix.
+    #[cfg(unix)]
     #[test]
     fn user_dirs_parsing() {
         let home = Path::new("/home/u");

@@ -459,18 +459,49 @@ async fn cmd_peers(data: &Path, timeout: u64, beacon: &BeaconArgs, json: bool) -
 /// Runs `fut`; the first Ctrl-C cancels it cleanly through `cancel` (the
 /// engine tells the peer and keeps resume state), a second one, or a prompt
 /// in progress, stops at once.
+///
+/// Ctrl-C is watched on its own task, which calls `cancel.cancel()` directly. If
+/// it were watched by a `select!` in the task that drives `fut`, a busy transfer
+/// (whose event loop doesn't yield while events are queued) would keep that task
+/// from noticing the signal until the transfer next yielded.
 async fn interruptible<T>(fut: impl Future<Output = Result<T, EngineError>>, cancel: &CancelHandle, prompting: &AtomicBool) -> Result<T, CliError> {
+    let (sig_tx, mut sig_rx) = tokio::sync::mpsc::unbounded_channel::<std::io::Result<()>>();
+    let watcher = {
+        let cancel = cancel.clone();
+        tokio::spawn(async move {
+            loop {
+                let s = tokio::signal::ctrl_c().await;
+                let failed = s.is_err();
+                if !failed {
+                    cancel.cancel();
+                }
+                if sig_tx.send(s).is_err() || failed {
+                    return;
+                }
+            }
+        })
+    };
+    // Stops the watcher on every exit path (including early returns below).
+    let _watcher = AbortOnDrop(watcher);
+
     tokio::pin!(fut);
     let signal = tokio::select! {
-        r = &mut fut => return r.map_err(CliError::from),
-        s = tokio::signal::ctrl_c() => s,
+        r = &mut fut => {
+            // The watcher cancels before it reports the signal, so the transfer can
+            // finish with Cancelled before the signal reaches this select. A
+            // cancellation we caused is an interrupt, not the peer cancelling.
+            return match r {
+                Err(EngineError::Cancelled) if cancel.is_cancelled() => Err(CliError::Interrupted),
+                r => r.map_err(CliError::from),
+            };
+        }
+        s = sig_rx.recv() => s,
     };
-    signal.map_err(|e| CliError::io("cannot listen for Ctrl-C", e))?;
+    signal.ok_or_else(|| CliError::io("cannot listen for Ctrl-C", std::io::Error::other("signal watcher stopped")))?.map_err(|e| CliError::io("cannot listen for Ctrl-C", e))?;
     if prompting.load(Ordering::SeqCst) {
         eprintln!();
         return Err(CliError::Interrupted);
     }
-    cancel.cancel();
     eprintln!("\nStopping… (Ctrl-C again to quit immediately)");
     tokio::select! {
         r = &mut fut => match r {
@@ -481,11 +512,22 @@ async fn interruptible<T>(fut: impl Future<Output = Result<T, EngineError>>, can
                 Err(CliError::Interrupted)
             }
         },
-        s = tokio::signal::ctrl_c() => {
-            s.map_err(|e| CliError::io("cannot listen for Ctrl-C", e))?;
+        s = sig_rx.recv() => {
+            if let Some(Err(e)) = s {
+                return Err(CliError::io("cannot listen for Ctrl-C", e));
+            }
             Err(CliError::Interrupted)
         }
         () = tokio::time::sleep(Duration::from_secs(10)) => Err(CliError::Interrupted),
+    }
+}
+
+/// Aborts a background task when dropped.
+struct AbortOnDrop(tokio::task::JoinHandle<()>);
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
     }
 }
 
@@ -497,7 +539,24 @@ fn drained(side: &str, r: transport::Result<()>) {
 
 fn progress_fn(reporter: &Arc<Reporter>) -> dfte_core::ProgressFn {
     let r = Arc::clone(reporter);
-    Arc::new(move |p: &Progress| r.update(p))
+    let delay = test_chunk_delay();
+    Arc::new(move |p: &Progress| {
+        r.update(p);
+        if let Some(d) = delay {
+            std::thread::sleep(d);
+        }
+    })
+}
+
+/// Test hook, debug builds only (like `DFTE_TEST_PROMPT_STDIN`): delay each
+/// confirmed chunk so an integration test can interrupt a transfer that is
+/// guaranteed to still be running. Release builds ignore the variable.
+fn test_chunk_delay() -> Option<std::time::Duration> {
+    if !cfg!(debug_assertions) {
+        return None;
+    }
+    let ms: u64 = std::env::var("DFTE_TEST_CHUNK_DELAY_MS").ok()?.parse().ok()?;
+    Some(std::time::Duration::from_millis(ms))
 }
 
 fn report_line(r: &TransferReport, verb: &str, peer: &str) -> String {

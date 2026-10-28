@@ -27,7 +27,7 @@ impl Device {
 
     fn cmd(&self) -> Command {
         let mut c = Command::new(env!("CARGO_BIN_EXE_dfte"));
-        c.env("XDG_DATA_HOME", self.root.path().join("data")).env("HOME", self.root.path()).env("DFTE_DEVICE_NAME", self.name).env_remove("RUST_LOG").env_remove("DFTE_TEST_PROMPT_STDIN");
+        c.env("XDG_DATA_HOME", self.root.path().join("data")).env("HOME", self.root.path()).env("DFTE_DEVICE_NAME", self.name).env_remove("RUST_LOG").env_remove("DFTE_TEST_PROMPT_STDIN").env_remove("DFTE_TEST_CHUNK_DELAY_MS");
         c
     }
 
@@ -339,7 +339,12 @@ fn sigint_then_rerun_resumes() {
     // One stream and a small window so the first attempt is still running when interrupted.
     let args = ["--expect", fb.as_str(), "--streams", "1"];
 
-    let mut s = sender(&a, &[&f], port, "tcp", &args);
+    // Slow the first attempt down (debug-build hook, 50 ms per 4 MiB chunk, so at
+    // least 1.6 s for 128 MiB). Otherwise a fast CI runner finishes the transfer
+    // before the SIGINT lands and the sender exits 0 (seen on ubuntu-latest).
+    let mut c = a.cmd();
+    c.env("DFTE_TEST_CHUNK_DELAY_MS", "50").args(["--json", "send"]).arg(&f).args(["--to", &format!("127.0.0.1:{port}"), "--transport", "tcp"]).args(BEACON).args(args);
+    let mut s = Proc::spawn(c);
     s.wait_for("Sending ");
     s.interrupt();
     let (ss, _, serr) = s.finish();

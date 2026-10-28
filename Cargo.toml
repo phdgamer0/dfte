@@ -54,6 +54,10 @@ ed25519-dalek = { version = "2.2", features = ["zeroize"] }
 zeroize = { version = "1.8", features = ["derive"] }
 criterion = "0.8"
 serde_bytes = "0.11"
+base64 = "0.22"
+socket2 = { version = "0.6", features = ["all"] }
+zbus = { version = "5", default-features = false, features = ["tokio"] }
+futures-util = { version = "0.3", default-features = false }
 
 [profile.release]
 lto = "thin"

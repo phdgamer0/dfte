@@ -1,6 +1,6 @@
 [package]
 name = "discovery"
-description = "PeerDiscovery trait and platform glue (manual §5/§6)."
+description = "PeerDiscovery trait, discovery state machine, QR bootstrap, LAN and Linux wpa_supplicant backends (manual §5/§6/§7)."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -10,4 +10,29 @@ publish = false
 [lints]
 workspace = true
 
+[features]
+default = []
+# Linux wpa_supplicant P2P backend over D-Bus (manual §5 Linux). Off by default: it pulls
+# in zbus and is only meaningful on Linux hosts with a P2P-capable wpa_supplicant.
+linux-wpa = ["dep:zbus", "dep:futures-util"]
+
 [dependencies]
+crypto.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+ring.workspace = true
+ed25519-dalek.workspace = true
+base64.workspace = true
+socket2.workspace = true
+tokio = { workspace = true, features = ["net", "time", "rt", "sync", "macros"] }
+zbus = { workspace = true, optional = true }
+futures-util = { workspace = true, optional = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread"] }
+proptest.workspace = true
+criterion.workspace = true
+
+[[bench]]
+name = "discovery"
+harness = false

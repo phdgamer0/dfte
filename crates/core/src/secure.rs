@@ -239,7 +239,7 @@ fn suite_ids(suites: &[CipherSuite]) -> Vec<u8> {
 /// effect in builds with the `bench-insecure-plaintext` feature.
 pub async fn establish_initiator(conn: Connection, opts: &CommonOptions, want_plaintext: bool) -> Result<SecureConnection> {
     let started = Instant::now();
-    let Connection { kind, peer: remote, control, data } = conn;
+    let Connection { kind, peer: remote, control, data, peer_key } = conn;
     let FramedStream { reader: mut cr, writer: mut cw } = control;
     let mut machine = ConnMachine::new(Role::Initiator);
     let local_caps = transport_cap(kind) | plaintext_cap(want_plaintext);
@@ -270,14 +270,14 @@ pub async fn establish_initiator(conn: Connection, opts: &CommonOptions, want_pl
     hs.read_message(&m2[HEADER_LEN..])?;
     send_plain(&mut cw, &Message::Handshake(&hs.write_message(&[])?), 2).await?;
 
-    let parts = Parts { kind, remote, cr, cw, data, machine, started };
+    let parts = Parts { kind, remote, transport_key: peer_key, cr, cw, data, machine, started };
     finish(parts, hs, opts, &prefs, &suites_from_ids(&ack.ciphers), ack.capabilities, usize::from(ack.streams), ack.device_name).await
 }
 
 /// Responder side (the file receiver). `max_streams` clamps the sender's request.
 pub async fn establish_responder(conn: Connection, opts: &CommonOptions, max_streams: u8, allow_plaintext: bool) -> Result<SecureConnection> {
     let started = Instant::now();
-    let Connection { kind, peer: remote, control, data } = conn;
+    let Connection { kind, peer: remote, control, data, peer_key } = conn;
     let FramedStream { reader: mut cr, writer: mut cw } = control;
     let mut machine = ConnMachine::new(Role::Responder);
     let local_caps = transport_cap(kind) | plaintext_cap(allow_plaintext);
@@ -314,13 +314,15 @@ pub async fn establish_responder(conn: Connection, opts: &CommonOptions, max_str
     let (_, m3) = recv_plain(&mut cr, &mut machine, opts.handshake_timeout).await?;
     hs.read_message(&m3[HEADER_LEN..])?;
 
-    let parts = Parts { kind, remote, cr, cw, data, machine, started };
+    let parts = Parts { kind, remote, transport_key: peer_key, cr, cw, data, machine, started };
     finish(parts, hs, opts, &prefs, &suites_from_ids(&hello.ciphers), ack.capabilities, usize::from(ack.streams), hello.device_name).await
 }
 
 struct Parts {
     kind: TransportKind,
     remote: SocketAddr,
+    /// Ed25519 key the transport itself proved (QUIC's TLS); `None` on TCP.
+    transport_key: Option<[u8; 32]>,
     cr: FrameReader,
     cw: FrameWriter,
     data: Vec<FramedStream>,
@@ -330,7 +332,7 @@ struct Parts {
 
 #[allow(clippy::too_many_arguments)]
 async fn finish(parts: Parts, hs: Handshake, opts: &CommonOptions, local: &[CipherSuite], remote: &[CipherSuite], agreed_caps: u64, streams: usize, peer_name: String) -> Result<SecureConnection> {
-    let Parts { kind, remote: remote_addr, cr, cw, data, mut machine, started } = parts;
+    let Parts { kind, remote: remote_addr, transport_key, cr, cw, data, mut machine, started } = parts;
     let (mut secrets, outcome) = hs.into_parts()?;
     machine.on_event(ConnEvent::HandshakeComplete)?;
 
@@ -348,6 +350,18 @@ async fn finish(parts: Parts, hs: Handshake, opts: &CommonOptions, local: &[Ciph
         streams_out.push(DataStream { stream_id, reader: s.reader, writer: s.writer, sealer, opener });
     }
     drop(secrets);
+
+    // When the transport already authenticated the peer (QUIC/TLS, manual §12.1),
+    // it must be the same identity Noise just authenticated; otherwise the two
+    // layers disagree about who is on the other end.
+    if transport_key.is_some_and(|k| k != outcome.remote_identity) {
+        tracing::warn!("transport identity does not match the Noise identity");
+        if let Err(se) = machine.on_event(ConnEvent::PeerRejected) {
+            tracing::debug!(error = %se, "identity mismatch fails the connection");
+        }
+        control_tx.close(CloseReason::AuthenticationFailed).await;
+        return Err(EngineError::AuthenticationFailed);
+    }
 
     let peer = PeerAuth { fingerprint: outcome.remote_fingerprint, sas: outcome.sas, device_name: peer_name };
     let verifier = opts.verifier.clone();

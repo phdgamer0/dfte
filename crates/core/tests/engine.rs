@@ -411,3 +411,20 @@ async fn relay(client: tokio::net::TcpStream, upstream: SocketAddr, mode: Mode) 
     let _ = tokio::io::copy(&mut cr, &mut sw).await;
     let _ = sw.shutdown().await;
 }
+
+/// A transport-proven key (QUIC TLS) that disagrees with the Noise identity must
+/// fail authentication, even with a verifier that trusts anyone (manual §12.1).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn transport_identity_must_match_noise_identity() {
+    let (mut l, addr) = listener().await;
+    let rx = tokio::spawn(async move {
+        let conn = l.accept().await.unwrap();
+        dfte_core::secure::establish_responder(conn, &CommonOptions::new(identity(), Arc::new(TrustAny)), 4, false).await
+    });
+    let mut conn = TcpTransport::default().connect(addr, 1).await.unwrap();
+    conn.peer_key = Some([0x42; 32]);
+    let r = establish_initiator(conn, &CommonOptions::new(identity(), Arc::new(TrustAny)), false).await;
+    assert!(matches!(r, Err(EngineError::AuthenticationFailed)), "{:?}", r.as_ref().err());
+    // The responder sees the session torn down rather than established-and-used.
+    let _responder = rx.await.unwrap();
+}

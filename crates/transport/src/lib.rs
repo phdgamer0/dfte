@@ -21,7 +21,7 @@ pub mod quic;
 pub mod tcp;
 
 pub use framed::{FrameReader, FrameWriter, FramedStream};
-pub use quic::{CongestionControl, QuicConfig, QuicListener, QuicTransport};
+pub use quic::{CongestionControl, MAX_SAFE_STREAM_WINDOW, QuicConfig, QuicListener, QuicTransport};
 pub use tcp::{TcpConfig, TcpListener, TcpTransport};
 
 pub type Result<T> = std::result::Result<T, TransportError>;

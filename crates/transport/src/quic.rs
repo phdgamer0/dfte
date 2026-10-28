@@ -78,7 +78,11 @@ pub enum CongestionControl {
 /// never waits on a window update.
 #[derive(Debug, Clone)]
 pub struct QuicConfig {
-    /// Per-stream receive window (bytes).
+    /// Per-stream receive window (bytes). Keep at or below
+    /// [`MAX_SAFE_STREAM_WINDOW`]: quinn kills a connection whose stream
+    /// buffer holds more than 1024 separate out-of-order pieces ("too many
+    /// gaps in stream buffer"), and a large window plus a burst of UDP loss
+    /// can create that many holes. This happened on Windows CI with 16 MiB.
     pub stream_receive_window: u64,
     /// Connection-wide receive window (bytes).
     pub receive_window: u64,
@@ -101,10 +105,20 @@ pub struct QuicConfig {
     pub linger: Duration,
 }
 
+/// quinn-proto's per-stream limit on separate buffered pieces (`MAX_CHUNKS`).
+const QUINN_MAX_STREAM_GAPS: u64 = 1024;
+/// Smallest datagram a QUIC packet carries (RFC 9000 §14); each lost packet
+/// opens at most one hole of at least this size.
+const MIN_QUIC_PACKET: u64 = 1200;
+/// Largest per-stream window where even worst-case loss can't exceed quinn's
+/// gap limit (~1.17 MiB). On a single-hop link (2-5 ms RTT) 1 MiB per stream
+/// still allows hundreds of MiB/s per stream; measured on loopback: no loss.
+pub const MAX_SAFE_STREAM_WINDOW: u64 = QUINN_MAX_STREAM_GAPS * MIN_QUIC_PACKET;
+
 impl Default for QuicConfig {
     fn default() -> Self {
         Self {
-            stream_receive_window: 16 << 20,
+            stream_receive_window: 1 << 20,
             receive_window: 64 << 20,
             send_window: 64 << 20,
             congestion: CongestionControl::Cubic,
@@ -129,6 +143,9 @@ impl QuicConfig {
         // Deliberate clamp: a window above the 2^62 varint limit just means "unbounded".
         let var = |v: u64| VarInt::from_u64(v).unwrap_or(VarInt::MAX);
         let mut t = quinn::TransportConfig::default();
+        if self.stream_receive_window > MAX_SAFE_STREAM_WINDOW {
+            return Err(TransportError::InvalidConfig("stream_receive_window above MAX_SAFE_STREAM_WINDOW (quinn gap limit)"));
+        }
         t.stream_receive_window(var(self.stream_receive_window)).receive_window(var(self.receive_window)).send_window(self.send_window).max_concurrent_bidi_streams(VarInt::from_u32(MAX_DATA_STREAMS as u32 + 1)).max_concurrent_uni_streams(VarInt::from_u32(0)).datagram_receive_buffer_size(None).keep_alive_interval(self.keep_alive).max_idle_timeout(Some(IdleTimeout::try_from(self.idle_timeout).map_err(|_| TransportError::InvalidConfig("idle_timeout"))?)).initial_mtu(self.initial_mtu).mtu_discovery_config(self.mtu_discovery.then(MtuDiscoveryConfig::default));
         match self.congestion {
             CongestionControl::Cubic => t.congestion_controller_factory(Arc::new(quinn::congestion::CubicConfig::default())),
@@ -469,6 +486,21 @@ impl Drop for QuicWriter {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn oversized_stream_window_is_rejected() {
+        let id = crypto::DeviceIdentity::generate().unwrap();
+        let cfg = QuicConfig { stream_receive_window: MAX_SAFE_STREAM_WINDOW + 1, ..QuicConfig::default() };
+        assert!(matches!(QuicTransport::new(&id, cfg), Err(TransportError::InvalidConfig(_))));
+    }
+
+    #[test]
+    fn default_stream_window_stays_within_quinn_gap_limit() {
+        assert!(QuicConfig::default().stream_receive_window <= MAX_SAFE_STREAM_WINDOW);
+        // The connection window still covers every data stream at once.
+        let c = QuicConfig::default();
+        assert!(c.receive_window >= c.stream_receive_window * (MAX_DATA_STREAMS as u64 + 1));
+    }
 
     #[test]
     fn preamble_roundtrip_and_rejects() {

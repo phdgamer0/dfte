@@ -1,5 +1,9 @@
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+use crate::error::ProtocolError;
+
+/// Message type byte of the fixed header (manual §8.1).
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 #[repr(u8)]
+#[non_exhaustive]
 pub enum MsgType {
     Hello = 0x01,
     HelloAck = 0x02,
@@ -12,4 +16,35 @@ pub enum MsgType {
     Ping = 0xF0,
     Pong = 0xF1,
     Close = 0xFF,
+}
+
+impl MsgType {
+    pub const ALL: [MsgType; 11] = [MsgType::Hello, MsgType::HelloAck, MsgType::ChunkData, MsgType::ChunkAck, MsgType::SelectiveNack, MsgType::ManifestOffer, MsgType::ManifestAccept, MsgType::Cancel, MsgType::Ping, MsgType::Pong, MsgType::Close];
+}
+
+impl TryFrom<u8> for MsgType {
+    type Error = ProtocolError;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        Ok(match value {
+            0x01 => MsgType::Hello,
+            0x02 => MsgType::HelloAck,
+            0x10 => MsgType::ChunkData,
+            0x11 => MsgType::ChunkAck,
+            0x12 => MsgType::SelectiveNack,
+            0x20 => MsgType::ManifestOffer,
+            0x21 => MsgType::ManifestAccept,
+            0x30 => MsgType::Cancel,
+            0xF0 => MsgType::Ping,
+            0xF1 => MsgType::Pong,
+            0xFF => MsgType::Close,
+            _ => return Err(ProtocolError::UnknownMsgType),
+        })
+    }
+}
+
+impl From<MsgType> for u8 {
+    fn from(value: MsgType) -> Self {
+        value as u8
+    }
 }

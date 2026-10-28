@@ -1,0 +1,46 @@
+name: Fuzz
+
+# see manual §33: short smoke run on PRs touching parsers, longer nightly run.
+on:
+  pull_request:
+    paths: ["crates/protocol/**", "crates/crypto/**", "fuzz/**"]
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+# Every `run:` step fails on any error, unset variable, or failure inside a
+# pipeline (e.g. `cargo ... | tee`), so no error is swallowed.
+defaults:
+  run:
+    shell: bash --noprofile --norc -euo pipefail {0}
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [fuzz_packet_parser, fuzz_manifest_parser, fuzz_state_machine]
+    env:
+      SECONDS_PER_TARGET: ${{ github.event_name == 'schedule' && '1800' || '60' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: fuzz
+      - name: Restore corpus
+        uses: actions/cache@v4
+        with:
+          path: fuzz/corpus/${{ matrix.target }}
+          key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
+          restore-keys: fuzz-corpus-${{ matrix.target }}-
+      - run: cargo install cargo-fuzz --locked
+      # rust-toolchain.toml pins stable; fuzzing needs -Z flags.
+      - run: cargo +nightly fuzz run ${{ matrix.target }} -- -max_total_time=$SECONDS_PER_TARGET
+        working-directory: fuzz
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: crash-${{ matrix.target }}
+          path: fuzz/artifacts/${{ matrix.target }}

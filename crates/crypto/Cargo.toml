@@ -11,3 +11,16 @@ publish = false
 workspace = true
 
 [dependencies]
+thiserror.workspace = true
+snow.workspace = true
+ring.workspace = true
+ed25519-dalek.workspace = true
+zeroize.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+criterion.workspace = true
+
+[[bench]]
+name = "aead"
+harness = false

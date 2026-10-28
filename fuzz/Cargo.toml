@@ -1,0 +1,37 @@
+[package]
+name = "dfte-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+protocol = { path = "../crates/protocol" }
+
+# Kept out of the main workspace: needs nightly + sanitizer flags (manual §33).
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "fuzz_packet_parser"
+path = "fuzz_targets/fuzz_packet_parser.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_manifest_parser"
+path = "fuzz_targets/fuzz_manifest_parser.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_state_machine"
+path = "fuzz_targets/fuzz_state_machine.rs"
+test = false
+doc = false
+bench = false

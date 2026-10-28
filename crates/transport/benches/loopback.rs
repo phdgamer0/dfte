@@ -95,11 +95,7 @@ fn bench(c: &mut Criterion) {
     let mut g = c.benchmark_group("quic_loopback_128MiB");
     g.throughput(Throughput::Bytes((FRAME * FRAMES) as u64));
     g.sample_size(10);
-    for (label, cfg) in [
-        ("cubic", QuicConfig::default()),
-        ("bbr", QuicConfig { congestion: CongestionControl::Bbr, ..QuicConfig::default() }),
-        ("cubic_osbuf", QuicConfig { socket_send_buffer: None, socket_recv_buffer: None, ..QuicConfig::default() }),
-    ] {
+    for (label, cfg) in [("cubic", QuicConfig::default()), ("bbr", QuicConfig { congestion: CongestionControl::Bbr, ..QuicConfig::default() }), ("cubic_osbuf", QuicConfig { socket_send_buffer: None, socket_recv_buffer: None, ..QuicConfig::default() })] {
         bulk(&mut g, &rt, label, &quic(cfg), payload);
     }
     g.finish();

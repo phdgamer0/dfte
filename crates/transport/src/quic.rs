@@ -129,16 +129,7 @@ impl QuicConfig {
         // Deliberate clamp: a window above the 2^62 varint limit just means "unbounded".
         let var = |v: u64| VarInt::from_u64(v).unwrap_or(VarInt::MAX);
         let mut t = quinn::TransportConfig::default();
-        t.stream_receive_window(var(self.stream_receive_window))
-            .receive_window(var(self.receive_window))
-            .send_window(self.send_window)
-            .max_concurrent_bidi_streams(VarInt::from_u32(MAX_DATA_STREAMS as u32 + 1))
-            .max_concurrent_uni_streams(VarInt::from_u32(0))
-            .datagram_receive_buffer_size(None)
-            .keep_alive_interval(self.keep_alive)
-            .max_idle_timeout(Some(IdleTimeout::try_from(self.idle_timeout).map_err(|_| TransportError::InvalidConfig("idle_timeout"))?))
-            .initial_mtu(self.initial_mtu)
-            .mtu_discovery_config(self.mtu_discovery.then(MtuDiscoveryConfig::default));
+        t.stream_receive_window(var(self.stream_receive_window)).receive_window(var(self.receive_window)).send_window(self.send_window).max_concurrent_bidi_streams(VarInt::from_u32(MAX_DATA_STREAMS as u32 + 1)).max_concurrent_uni_streams(VarInt::from_u32(0)).datagram_receive_buffer_size(None).keep_alive_interval(self.keep_alive).max_idle_timeout(Some(IdleTimeout::try_from(self.idle_timeout).map_err(|_| TransportError::InvalidConfig("idle_timeout"))?)).initial_mtu(self.initial_mtu).mtu_discovery_config(self.mtu_discovery.then(MtuDiscoveryConfig::default));
         match self.congestion {
             CongestionControl::Cubic => t.congestion_controller_factory(Arc::new(quinn::congestion::CubicConfig::default())),
             CongestionControl::Bbr => t.congestion_controller_factory(Arc::new(quinn::congestion::BbrConfig::default())),
@@ -170,11 +161,7 @@ impl QuicTransport {
         let (cert, key) = identity_certificate(identity)?;
         let transport = config.transport()?;
 
-        let mut tls_client = rustls::ClientConfig::builder_with_provider(provider.clone())
-            .with_protocol_versions(&[&rustls::version::TLS13])?
-            .dangerous()
-            .with_custom_certificate_verifier(verifier.clone())
-            .with_client_auth_cert(vec![cert.clone()], key.clone_key())?;
+        let mut tls_client = rustls::ClientConfig::builder_with_provider(provider.clone()).with_protocol_versions(&[&rustls::version::TLS13])?.dangerous().with_custom_certificate_verifier(verifier.clone()).with_client_auth_cert(vec![cert.clone()], key.clone_key())?;
         tls_client.alpn_protocols = vec![ALPN.to_vec()];
         let mut client = quinn::ClientConfig::new(Arc::new(QuicClientConfig::try_from(tls_client).map_err(|_| TransportError::InvalidConfig("tls client"))?));
         client.transport_config(transport.clone());

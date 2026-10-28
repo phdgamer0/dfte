@@ -2,10 +2,10 @@
 //! tests. QUIC plugs in by adding one more `#[tokio::test]` calling `suite`.
 #![allow(clippy::unwrap_used)]
 
+use crypto::DeviceIdentity;
 use protocol::MsgType;
 use protocol::header::Header;
 use tokio::io::AsyncWriteExt;
-use crypto::DeviceIdentity;
 use transport::{Listener, QuicConfig, QuicTransport, TcpTransport, Transport, TransportError};
 
 fn hdr(t: MsgType, stream: u32, seq: u64, len: usize) -> Header {

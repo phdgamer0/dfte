@@ -50,6 +50,10 @@ pub enum StorageError {
     #[error("chunk {index} length mismatch: expected {expected}, got {actual}")]
     ChunkLengthMismatch { index: u64, expected: u64, actual: u64 },
 
+    /// Number of per-chunk piece hashes does not match the file's chunk count.
+    #[error("expected {expected} piece hashes, got {actual}")]
+    PieceCountMismatch { expected: u64, actual: u64 },
+
     /// A caller-supplied buffer is smaller than required.
     #[error("buffer too small: need {needed} bytes, capacity {capacity}")]
     BufferTooSmall { needed: u64, capacity: u64 },

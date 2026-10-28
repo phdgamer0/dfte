@@ -70,5 +70,13 @@ rcgen = { version = "0.14", default-features = false, features = ["ring", "crypt
 lto = "thin"
 codegen-units = 1
 
+# Build-size diet: full DWARF for every dependency is most of a debug target/.
+# Our crates keep file:line for backtraces; dependencies carry no debug info.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
+
 [profile.bench]
-debug = true
+debug = "line-tables-only"

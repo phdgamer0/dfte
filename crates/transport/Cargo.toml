@@ -7,7 +7,24 @@ license.workspace = true
 repository.workspace = true
 publish = false
 
+# Criterion flags reach every bench target; the libtest harness rejects them.
+[lib]
+bench = false
+
 [lints]
 workspace = true
 
 [dependencies]
+protocol.workspace = true
+tokio = { workspace = true, features = ["net", "io-util", "time", "rt", "macros"] }
+thiserror.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread"] }
+criterion.workspace = true
+
+[[bench]]
+name = "loopback"
+harness = false

@@ -80,5 +80,61 @@ fn bench(c: &mut Criterion) {
     g.finish();
 }
 
-criterion_group!(benches, bench);
+/// Control-path shape: many small frames (ChunkAck-sized) on one stream.
+fn small_frames(c: &mut Criterion) {
+    const N: usize = 20_000;
+    let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap();
+    let t = TcpTransport::default();
+    let (mut a, mut b) = rt.block_on(pair(&t, 1));
+    let body = [5u8; 64];
+    let mut g = c.benchmark_group("tcp_small_frames");
+    g.throughput(Throughput::Elements(N as u64));
+    g.sample_size(10);
+    g.bench_function("64B_x20k_queued", |bch| {
+        bch.iter_custom(|iters| {
+            let start = std::time::Instant::now();
+            for _ in 0..iters {
+                rt.block_on(async {
+                    let send = async {
+                        for i in 0..N {
+                            a.control.writer.queue_frame(&Header::new(MsgType::ChunkAck, 0, 0, i as u64, 64), &[&body]).await.unwrap();
+                        }
+                        a.control.writer.flush().await.unwrap();
+                    };
+                    let recv = async {
+                        for _ in 0..N {
+                            b.control.reader.read_frame().await.unwrap().unwrap();
+                        }
+                    };
+                    tokio::join!(send, recv);
+                });
+            }
+            start.elapsed()
+        })
+    });
+    g.bench_function("64B_x20k_flush_each", |bch| {
+        bch.iter_custom(|iters| {
+            let start = std::time::Instant::now();
+            for _ in 0..iters {
+                rt.block_on(async {
+                    let send = async {
+                        for i in 0..N {
+                            a.control.writer.write_frame(&Header::new(MsgType::ChunkAck, 0, 0, i as u64, 64), &[&body]).await.unwrap();
+                        }
+                    };
+                    let recv = async {
+                        for _ in 0..N {
+                            b.control.reader.read_frame().await.unwrap().unwrap();
+                        }
+                    };
+                    tokio::join!(send, recv);
+                });
+            }
+            start.elapsed()
+        })
+    });
+    g.finish();
+}
+
+criterion_group!(benches, bench, small_frames);
 criterion_main!(benches);

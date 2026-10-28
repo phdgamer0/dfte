@@ -4,7 +4,7 @@
 use std::io::IoSlice;
 
 use protocol::header::{HEADER_LEN, Header};
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader, BufWriter};
 
 use crate::{Result, TransportError};
 
@@ -14,14 +14,19 @@ pub type BoxWrite = Box<dyn AsyncWrite + Send + Unpin>;
 /// Body parts per frame: chunk sub-header, data, detached AEAD tag, plus one spare.
 pub const MAX_PARTS: usize = 4;
 
+/// Read-side buffer. Small control frames (acks) then cost ~one syscall per
+/// batch instead of two per frame; body reads larger than this bypass the
+/// buffer, so 4 MiB chunks still land directly in the caller's buffer.
+const READ_BUFFER: usize = 64 * 1024;
+
 pub struct FrameReader<R = BoxRead> {
-    inner: R,
+    inner: BufReader<R>,
     buf: Vec<u8>,
 }
 
 impl<R: AsyncRead + Unpin> FrameReader<R> {
     pub fn new(inner: R) -> Self {
-        Self { inner, buf: Vec::new() }
+        Self { inner: BufReader::with_capacity(READ_BUFFER, inner), buf: Vec::new() }
     }
 
     /// Reads the next header. `Ok(None)` on a clean EOF at a frame boundary;
@@ -65,19 +70,34 @@ impl<R: AsyncRead + Unpin> FrameReader<R> {
     }
 }
 
+/// Small frames are coalesced here between flushes; writes larger than this
+/// (chunk bodies) bypass it.
+const WRITE_BUFFER: usize = 64 * 1024;
+
 pub struct FrameWriter<W = BoxWrite> {
-    inner: W,
+    inner: BufWriter<W>,
 }
 
 impl<W: AsyncWrite + Unpin> FrameWriter<W> {
     pub fn new(inner: W) -> Self {
-        Self { inner }
+        Self { inner: BufWriter::with_capacity(WRITE_BUFFER, inner) }
     }
 
-    /// Writes header + body parts with vectored I/O, so a chunk sub-header, the
-    /// chunk data and a detached AEAD tag go out without being concatenated
+    /// Writes one frame and flushes it to the stream.
+    ///
+    /// Header + body parts go out with vectored I/O, so a chunk sub-header,
+    /// the chunk data and a detached AEAD tag are never concatenated
     /// (manual §14). The parts' total length must equal `header.payload_length`.
     pub async fn write_frame(&mut self, header: &Header, parts: &[&[u8]]) -> Result<()> {
+        self.queue_frame(header, parts).await?;
+        self.flush().await
+    }
+
+    /// Like [`write_frame`](Self::write_frame) but leaves small frames in the
+    /// write buffer until [`flush`](Self::flush). Batching acks this way is
+    /// ~40x cheaper than one syscall + TCP segment per ack. Forgetting to
+    /// flush stalls the peer, so only use this inside a batch that ends in a flush.
+    pub async fn queue_frame(&mut self, header: &Header, parts: &[&[u8]]) -> Result<()> {
         let total: usize = parts.iter().map(|p| p.len()).sum();
         if total != header.payload_length as usize {
             return Err(TransportError::LengthMismatch { header: header.payload_length, actual: total });

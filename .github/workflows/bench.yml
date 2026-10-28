@@ -1,0 +1,66 @@
+name: Benchmarks
+
+# see manual §30: microbenchmarks on every PR, compared against the latest
+# main baseline. Shared runners are noisy, so this reports and never fails.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Every `run:` step fails on any error, unset variable, or failure inside a
+# pipeline (e.g. `cargo ... | tee`), so no error is swallowed.
+defaults:
+  run:
+    shell: bash --noprofile --norc -euo pipefail {0}
+
+concurrency:
+  group: bench-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  criterion:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.98.1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: bench
+      - name: Restore main baseline
+        if: github.event_name == 'pull_request'
+        uses: actions/cache/restore@v4
+        with:
+          path: target/criterion
+          key: criterion-main-${{ github.sha }}
+          restore-keys: criterion-main-
+      - name: Run benches
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ] && [ -d target/criterion ]; then
+            ARGS="--baseline main"
+          else
+            ARGS="--save-baseline main"
+          fi
+          cargo bench --workspace -- --warm-up-time 1 --measurement-time 3 --noplot $ARGS 2>&1 | tee bench.txt
+      - name: Save main baseline
+        if: github.event_name == 'push'
+        uses: actions/cache/save@v4
+        with:
+          path: target/criterion
+          key: criterion-main-${{ github.sha }}
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### Benchmark results"
+            echo '```'
+            grep -E '^[A-Za-z0-9_/.-]+( |$)|time:|thrpt:|change:|Performance has|No change' bench.txt | grep -v '^Benchmarking' || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: criterion-${{ github.sha }}
+          path: |
+            bench.txt
+            target/criterion

@@ -32,6 +32,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
+      # Linux wpa_supplicant/zbus backend is feature-gated (manual §5 Linux); keep it compiling.
+      - run: cargo clippy -p discovery --all-targets --features linux-wpa -- -D warnings
+      - run: cargo test -p discovery --features linux-wpa
 
   test:
     name: test (${{ matrix.os }})

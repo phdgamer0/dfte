@@ -39,6 +39,7 @@ use crate::options::{CancelHandle, Progress, SendOptions};
 use crate::report::{Direction, PhaseTimings, TransferReport, rate, secs};
 use crate::secure::{Control, ControlRx, DataStream, SecureConnection, establish_initiator};
 use crate::source::{Readers, Source, build_source_blocking};
+use crate::tasks::{abort_all, forward, join_all};
 
 /// Pool buffers hold a whole sealed chunk body: sub-header + data + tag.
 pub(crate) const BODY_CAPACITY: usize = CHUNK_HEADER_LEN + CHUNK_SIZE as usize + TAG_LEN;
@@ -197,6 +198,9 @@ async fn producer(stream_id: u32, mut sealer: Option<Sealer>, queue: Arc<WorkQue
         };
         buf.set_len(body_len)?;
         if tx.send(Prepared { id: work.id, header, buf, tag }).await.is_err() {
+            // The writer only goes away after failing, and it reports that failure
+            // itself; nothing left to do here.
+            tracing::debug!(stream_id, "writer gone, producer stopping");
             break;
         }
     }
@@ -205,12 +209,12 @@ async fn producer(stream_id: u32, mut sealer: Option<Sealer>, queue: Arc<WorkQue
 
 async fn writer(mut w: FrameWriter, mut rx: mpsc::Receiver<Prepared>, events: mpsc::UnboundedSender<Event>) -> Result<()> {
     while let Some(p) = rx.recv().await {
-        let _ = events.send(Event::Sending(p.id));
+        forward(&events, Event::Sending(p.id));
         match &p.tag {
             Some(tag) => w.write_frame(&p.header, &[&p.buf, tag]).await?,
             None => w.write_frame(&p.header, &[&p.buf]).await?,
         }
-        let _ = events.send(Event::Written(p.id, p.buf));
+        forward(&events, Event::Written(p.id, p.buf));
     }
     w.shutdown().await?;
     Ok(())
@@ -224,7 +228,8 @@ async fn control_reader(mut rx: ControlRx, events: mpsc::UnboundedSender<Event>)
             Err(e) => Event::Failed(e),
         };
         let stop = !matches!(ev, Event::Control(_));
-        if events.send(ev).is_err() || stop {
+        forward(&events, ev);
+        if stop || events.is_closed() {
             return;
         }
     }
@@ -236,7 +241,7 @@ fn spawn_reporting(set: &mut JoinSet<()>, events: &mpsc::UnboundedSender<Event>,
     set.spawn(
         async move {
             if let Err(e) = fut.await {
-                let _ = events.send(Event::Failed(e));
+                forward(&events, Event::Failed(e));
             }
         }
         .in_current_span(),
@@ -343,12 +348,17 @@ async fn transfer(sc: SecureConnection, files: Vec<crate::source::SourceFile>, p
     match res {
         Ok(v) => Ok(v),
         Err(e) => {
-            if xfer.on_event(if matches!(e, EngineError::Cancelled) { TransferEvent::Cancel } else { TransferEvent::ConnectionLost }).is_err() {
-                tracing::debug!("transfer state machine already terminal");
+            if let Err(se) = xfer.on_event(if matches!(e, EngineError::Cancelled) { TransferEvent::Cancel } else { TransferEvent::ConnectionLost }) {
+                tracing::debug!(error = %se, "transfer state machine already terminal");
             }
-            set.abort_all();
-            if matches!(e, EngineError::Cancelled) {
-                let _ = control_tx.send(&Message::Cancel).await;
+            if let Err(te) = abort_all(&mut set).await {
+                tracing::error!(error = %te, "task failure while tearing down after: {e}");
+            }
+            if matches!(e, EngineError::Cancelled) && opts.common.cancel.as_ref().is_some_and(CancelHandle::is_cancelled) {
+                // Best effort on a failing path: the local error is what we report.
+                if let Err(ce) = control_tx.send(&Message::Cancel).await {
+                    tracing::debug!(error = %ce, "could not tell peer about cancel");
+                }
             }
             if !matches!(e, EngineError::PeerLost | EngineError::ConnectionRejected | EngineError::PeerDiskFull) {
                 control_tx.close(e.close_reason()).await;
@@ -375,7 +385,7 @@ async fn drive(control_tx: &mut crate::secure::ControlTx, control_rx: ControlRx,
         spawn_reporting(set, &ev_tx, producer(stream_id, sealer, Arc::clone(&queue), Arc::clone(&readers), pool.clone(), ptx));
         spawn_reporting(set, &ev_tx, writer(w, prx, ev_tx.clone()));
     }
-    set.spawn(control_reader(control_rx, ev_tx.clone()).in_current_span());
+    let control_task = set.spawn(control_reader(control_rx, ev_tx.clone()).in_current_span());
     drop(ev_tx);
 
     let mut tracker = ChunkTracker::new(opts.ack_timeout);
@@ -443,7 +453,7 @@ async fn drive(control_tx: &mut crate::secure::ControlTx, control_rx: ControlRx,
                         pending_retx.remove(&id);
                         confirmed[f].set(u64::from(chunk_index));
                         done_chunks += 1;
-                        bytes_done += storage::chunk_len(sizes[f], u64::from(chunk_index)).unwrap_or(0);
+                        bytes_done += storage::chunk_len(sizes[f], u64::from(chunk_index)).ok_or_else(|| EngineError::Internal("acked chunk out of range".into()))?;
                         if let Some(cb) = &opts.common.progress {
                             cb(&Progress { transfer_id: transfer_id.clone(), bytes_done, bytes_total, chunks_done: done_chunks, chunks_total: plan.total_chunks });
                         }
@@ -491,7 +501,20 @@ async fn drive(control_tx: &mut crate::secure::ControlTx, control_rx: ControlRx,
         }
     }
     let finalize = secs(t.elapsed());
-    let _ = control_tx.shutdown().await;
-    set.abort_all();
+    // The receiver has already committed the files and may have hung up, so a
+    // failing half-close is logged instead of failing a finished transfer.
+    if let Err(e) = control_tx.shutdown().await {
+        tracing::debug!(error = %e, "control half-close after completion failed");
+    }
+    // The control reader may still be parked on the socket; everything else ends
+    // by itself now that the queue is closed. Reap them all (panics propagate)
+    // and surface any failure a stream task reported on the way out.
+    control_task.abort();
+    join_all(set).await?;
+    while let Ok(ev) = ev_rx.try_recv() {
+        if let Event::Failed(e) = ev {
+            return Err(e);
+        }
+    }
     Ok((retransmits, finalize))
 }

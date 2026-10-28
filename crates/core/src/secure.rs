@@ -78,11 +78,16 @@ impl ControlTx {
         self.flush().await
     }
 
-    /// Best-effort `Close(reason)` and half-close; errors are ignored because this
-    /// runs on paths that are already failing.
+    /// Best-effort `Close(reason)` and half-close. Only used on paths that are
+    /// already failing with their own error, so a failure here is logged, not
+    /// returned (it would mask the real cause).
     pub async fn close(&mut self, reason: CloseReason) {
-        let _ = self.send(&Message::Close(reason)).await;
-        let _ = self.writer.shutdown().await;
+        if let Err(e) = self.send(&Message::Close(reason)).await {
+            tracing::debug!(error = %e, ?reason, "could not send Close");
+        }
+        if let Err(e) = self.writer.shutdown().await {
+            tracing::debug!(error = %e, "control half-close failed");
+        }
     }
 
     pub async fn shutdown(&mut self) -> Result<()> {
@@ -198,7 +203,11 @@ async fn recv_plain(r: &mut FrameReader, machine: &mut ConnMachine, limit: Durat
         if h.msg_type != MsgType::Close
             && let Err(e) = machine.check_incoming(h.msg_type)
         {
-            let _ = machine.on_event(ConnEvent::Malformed(e.clone()));
+            // Drive the machine to Failed for the record; the error it returns is
+            // the same `e` we report below.
+            if let Err(se) = machine.on_event(ConnEvent::Malformed(e.clone())) {
+                tracing::debug!(error = %se, "connection state machine failed");
+            }
             return Err(EngineError::violation(format!("unexpected {:?} during handshake", h.msg_type)));
         }
         let mut frame = h.to_bytes().to_vec();
@@ -285,7 +294,9 @@ pub async fn establish_responder(conn: Connection, opts: &CommonOptions, max_str
         Ok(ack) => ack,
         Err(ProtocolError::NoCommonVersion) => {
             // Manual §37: say why, then close; never guess at an unknown version.
-            let _ = send_plain(&mut cw, &Message::Close(CloseReason::UnsupportedVersion), 0).await;
+            if let Err(e) = send_plain(&mut cw, &Message::Close(CloseReason::UnsupportedVersion), 0).await {
+                tracing::debug!(error = %e, "could not send UnsupportedVersion close");
+            }
             return Err(EngineError::UnsupportedVersion);
         }
         Err(e) => return Err(e.into()),
@@ -343,7 +354,10 @@ async fn finish(parts: Parts, hs: Handshake, opts: &CommonOptions, local: &[Ciph
     let shown = peer.clone();
     let accepted = tokio::task::spawn_blocking(move || verifier.verify(&shown)).await?;
     if !accepted {
-        let _ = machine.on_event(ConnEvent::PeerRejected);
+        if let Err(se) = machine.on_event(ConnEvent::PeerRejected) {
+            // Expected: rejection is a transition to Failed.
+            tracing::debug!(error = %se, "peer rejected by local verifier");
+        }
         control_tx.close(CloseReason::AuthenticationFailed).await;
         return Err(EngineError::AuthenticationFailed);
     }

@@ -36,6 +36,7 @@ use crate::options::{Progress, ReceiveOptions};
 use crate::report::{Direction, PhaseTimings, TransferReport, rate, secs};
 use crate::secure::{Control, ControlTx, DataStream, SecureConnection, establish_responder};
 use crate::sender::{BODY_CAPACITY, cancelled, kind_name};
+use crate::tasks::{abort_all, forward_bounded};
 
 /// Accept one connection on `listener`, authenticate the peer, and receive its
 /// transfer: partial data and the resume sidecar live in `staging_dir`
@@ -197,7 +198,6 @@ enum Event {
     ChunkDone { file: u32, chunk: u32, hash: [u8; 32] },
     Control(Control),
     ControlEof,
-    Flushed(Result<()>),
     Failed(EngineError),
 }
 
@@ -211,8 +211,19 @@ struct FileInfo {
 async fn data_reader(ds: DataStream, pool: BufferPool, files: Arc<Vec<FileInfo>>, events: mpsc::Sender<Event>) -> Result<()> {
     let DataStream { stream_id, mut reader, mut opener, .. } = ds;
     let overhead = CHUNK_HEADER_LEN + if opener.is_some() { TAG_LEN } else { 0 };
+    // Hash+pwrite jobs; reaped as they finish so a panicking write surfaces as
+    // an error instead of a chunk that silently never gets acked.
+    let mut writes: JoinSet<()> = JoinSet::new();
     loop {
-        let Some(h) = reader.read_header().await? else { return Ok(()) };
+        while let Some(r) = writes.try_join_next() {
+            r?;
+        }
+        let Some(h) = reader.read_header().await? else {
+            while let Some(r) = writes.join_next().await {
+                r?;
+            }
+            return Ok(());
+        };
         let body_len = h.payload_length as usize;
         if h.msg_type != MsgType::ChunkData || h.stream_id != stream_id || body_len < overhead || body_len > BODY_CAPACITY {
             return Err(EngineError::violation(format!("bad frame on data stream {stream_id}: {:?}", h.msg_type)));
@@ -229,7 +240,7 @@ async fn data_reader(ds: DataStream, pool: BufferPool, files: Arc<Vec<FileInfo>>
         buf.set_len(plain_len)?;
         let files = Arc::clone(&files);
         let events = events.clone();
-        tokio::task::spawn_blocking(move || {
+        writes.spawn_blocking(move || {
             let info = &files[ch.file_index as usize];
             let data = &buf[CHUNK_HEADER_LEN..];
             let hash = piece_hash(info.size, index, data);
@@ -245,7 +256,11 @@ async fn data_reader(ds: DataStream, pool: BufferPool, files: Arc<Vec<FileInfo>>
                 Ok(()) => Event::ChunkDone { file: ch.file_index, chunk: ch.chunk_index, hash },
                 Err(e) => Event::Failed(e.into()),
             };
-            let _ = events.blocking_send(ev);
+            if events.blocking_send(ev).is_err() {
+                // The event loop already ended (with its own error); this chunk is
+                // simply not recorded and will be resent on resume.
+                tracing::trace!("event loop gone, dropping chunk result");
+            }
         });
     }
 }
@@ -318,20 +333,36 @@ async fn run(mut sc: SecureConnection, staging: PathBuf, dest: PathBuf, opts: &R
     let res = drive(&mut control_tx, control_rx, data, &manifest, &mut inc, opts, &staging, &mut set).await;
     // Stop the stream tasks (they may be parked on a read) and let them drop
     // their handles on the staging files.
-    set.abort_all();
-    while set.join_next().await.is_some() {}
+    let reaped = abort_all(&mut set).await;
+    let res = match (res, reaped) {
+        (Ok(()), r) => r,
+        (Err(e), Err(te)) => {
+            tracing::error!(error = %te, "task failure while tearing down after: {e}");
+            Err(e)
+        }
+        (Err(e), Ok(())) => Err(e),
+    };
 
     if let Err(e) = res {
         let event = if matches!(e, EngineError::Cancelled) { TransferEvent::Cancel } else { TransferEvent::ConnectionLost };
-        let _ = xfer.on_event(event);
+        if let Err(se) = xfer.on_event(event) {
+            tracing::debug!(error = %se, "transfer state machine already terminal");
+        }
         tracing::warn!(error = %e, "receive interrupted, keeping resume state");
         if matches!(e, EngineError::Cancelled) && opts.common.cancel.as_ref().is_some_and(super::options::CancelHandle::is_cancelled) {
-            let _ = control_tx.send(&Message::Cancel).await;
+            // Best effort on a failing path: the local error is what we report.
+            if let Err(ce) = control_tx.send(&Message::Cancel).await {
+                tracing::debug!(error = %ce, "could not tell peer about cancel");
+            }
         }
         if !matches!(e, EngineError::PeerLost | EngineError::Cancelled) {
             control_tx.close(e.close_reason()).await;
         }
-        persist_on_interrupt(&inc, &staging).await;
+        if let Err(pe) = persist_on_interrupt(&inc, &staging).await {
+            // The interruption is the error to report; failing to persist only
+            // means the next attempt starts further back.
+            tracing::error!(error = %pe, "could not persist resume state");
+        }
         return Err(e);
     }
     let transfer_secs = secs(t.elapsed());
@@ -342,7 +373,11 @@ async fn run(mut sc: SecureConnection, staging: PathBuf, dest: PathBuf, opts: &R
         Ok(saved) => {
             xfer.on_event(TransferEvent::AllChunksConfirmed)?;
             control_tx.send(&Message::Close(CloseReason::Done)).await?;
-            let _ = control_tx.shutdown().await;
+            // Files are committed and the sender has its Done; a failing half-close
+            // (peer already hung up) doesn't change the outcome.
+            if let Err(e) = control_tx.shutdown().await {
+                tracing::debug!(error = %e, "control half-close after completion failed");
+            }
             timings.finalize_secs = secs(t.elapsed());
             timings.transfer_secs = transfer_secs;
             let bytes_total = manifest.total_bytes();
@@ -352,7 +387,9 @@ async fn run(mut sc: SecureConnection, staging: PathBuf, dest: PathBuf, opts: &R
             Ok(TransferReport { direction: Direction::Receive, transfer_id: manifest.transfer_id.to_string(), peer_fingerprint: peer.fingerprint, peer_name: peer.device_name, transport: kind_name(kind), cipher, streams, files: manifest.files.len(), bytes_total, bytes_transferred, resumed_bytes: inc.resumed_bytes, chunks, retransmits: 0, total_secs: secs(started.elapsed()), throughput_bytes_per_sec: rate(bytes_transferred, transfer_secs), timings, saved })
         }
         Err(e) => {
-            let _ = xfer.on_event(TransferEvent::IntegrityFailure);
+            if let Err(se) = xfer.on_event(TransferEvent::IntegrityFailure) {
+                tracing::debug!(error = %se, "transfer state machine already terminal");
+            }
             tracing::error!(error = %e, "finalize failed");
             control_tx.close(e.close_reason()).await;
             Err(e)
@@ -360,23 +397,20 @@ async fn run(mut sc: SecureConnection, staging: PathBuf, dest: PathBuf, opts: &R
     }
 }
 
-/// Best-effort: make staged data durable and persist the bitmap so a later
-/// transfer of the same files resumes (manual §19).
-async fn persist_on_interrupt(inc: &Incoming, staging: &Path) {
+/// Make staged data durable and persist the bitmap so a later transfer of the
+/// same files resumes (manual §19).
+async fn persist_on_interrupt(inc: &Incoming, staging: &Path) -> Result<()> {
     let staged: Vec<Arc<StagedFile>> = inc.staged.iter().flatten().cloned().collect();
     let state = inc.state.clone();
     let staging = staging.to_path_buf();
-    let r = tokio::task::spawn_blocking(move || -> Result<()> {
+    tokio::task::spawn_blocking(move || -> Result<()> {
         for sf in staged {
             sf.sync_blocking()?;
         }
         state.save_blocking(&staging)?;
         Ok(())
     })
-    .await;
-    if !matches!(r, Ok(Ok(()))) {
-        tracing::warn!("could not persist resume state");
-    }
+    .await?
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -391,7 +425,7 @@ async fn drive(control_tx: &mut ControlTx, control_rx: crate::secure::ControlRx,
         set.spawn(
             async move {
                 if let Err(e) = fut.await {
-                    let _ = events.send(Event::Failed(e)).await;
+                    forward_bounded(&events, Event::Failed(e)).await;
                 }
             }
             .in_current_span(),
@@ -410,7 +444,8 @@ async fn drive(control_tx: &mut ControlTx, control_rx: crate::secure::ControlRx,
                         Err(e) => Event::Failed(e),
                     };
                     let stop = !matches!(ev, Event::Control(_));
-                    if events.send(ev).await.is_err() || stop {
+                    forward_bounded(&events, ev).await;
+                    if stop || events.is_closed() {
                         return;
                     }
                 }
@@ -426,7 +461,8 @@ async fn drive(control_tx: &mut ControlTx, control_rx: crate::secure::ControlRx,
     let mut bytes_done = inc.resumed_bytes;
     let mut dirty: BTreeSet<usize> = BTreeSet::new();
     let mut unflushed = 0u32;
-    let mut flushing = false;
+    // At most one sidecar flush runs at a time; its result is awaited, never dropped.
+    let mut flush_task: Option<tokio::task::JoinHandle<Result<()>>> = None;
     let mut acks_pending = false;
     let mut last_heard = Instant::now();
     let mut tick = tokio::time::interval(Duration::from_millis(500));
@@ -438,6 +474,14 @@ async fn drive(control_tx: &mut ControlTx, control_rx: crate::secure::ControlRx,
             biased;
             () = cancelled(&opts.common.cancel) => break Err(EngineError::Cancelled),
             ev = ev_rx.recv() => match ev { Some(ev) => ev, None => break Err(EngineError::Internal("receiver tasks vanished".into())) },
+            r = join_flush(&mut flush_task) => {
+                flush_task = None;
+                match r {
+                    Ok(Ok(())) => continue,
+                    Ok(Err(e)) => break Err(e),
+                    Err(e) => break Err(e.into()),
+                }
+            }
             _ = tick.tick() => {
                 if last_heard.elapsed() > opts.common.idle_timeout {
                     break Err(EngineError::Timeout);
@@ -453,7 +497,7 @@ async fn drive(control_tx: &mut ControlTx, control_rx: crate::secure::ControlRx,
                 if slot.is_none() {
                     missing -= 1;
                     chunks_done += 1;
-                    bytes_done += storage::chunk_len(manifest.files[f].size, u64::from(chunk)).unwrap_or(0);
+                    bytes_done += storage::chunk_len(manifest.files[f].size, u64::from(chunk)).ok_or_else(|| EngineError::Internal("chunk out of range".into()))?;
                 }
                 *slot = Some(hash);
                 if inc.state.mark_confirmed(f, u64::from(chunk))? {
@@ -479,38 +523,21 @@ async fn drive(control_tx: &mut ControlTx, control_rx: crate::secure::ControlRx,
             Event::Control(Control::Ping(_) | Control::Pong(_)) => last_heard = Instant::now(),
             Event::Control(other) => break Err(EngineError::violation(format!("unexpected {other:?} during transfer"))),
             Event::ControlEof => break Err(EngineError::PeerLost),
-            Event::Flushed(r) => {
-                flushing = false;
-                if let Err(e) = r {
-                    break Err(e);
-                }
-            }
             Event::Failed(e) => break Err(e),
         }
-        if unflushed >= opts.flush_every.max(1) && !flushing {
-            flushing = true;
+        if unflushed >= opts.flush_every.max(1) && flush_task.is_none() {
             unflushed = 0;
             let files: Vec<Arc<StagedFile>> = std::mem::take(&mut dirty).into_iter().filter_map(|i| inc.staged[i].clone()).collect();
             let state = inc.state.clone();
             let dir = staging.to_path_buf();
-            let events = ev_tx.clone();
-            tokio::spawn(
-                async move {
-                    let r = tokio::task::spawn_blocking(move || -> Result<()> {
-                        // Data first, then the sidecar that claims it (manual §19).
-                        for sf in files {
-                            sf.sync_blocking()?;
-                        }
-                        state.save_blocking(&dir)?;
-                        Ok(())
-                    })
-                    .await
-                    .map_err(EngineError::from)
-                    .and_then(|r| r);
-                    let _ = events.send(Event::Flushed(r)).await;
+            flush_task = Some(tokio::task::spawn_blocking(move || -> Result<()> {
+                // Data first, then the sidecar that claims it (manual §19).
+                for sf in files {
+                    sf.sync_blocking()?;
                 }
-                .in_current_span(),
-            );
+                state.save_blocking(&dir)?;
+                Ok(())
+            }));
         }
         // Batch acks: one flush per burst of ready events (transport queue_frame).
         if acks_pending && ev_rx.is_empty() {
@@ -521,13 +548,23 @@ async fn drive(control_tx: &mut ControlTx, control_rx: crate::secure::ControlRx,
         }
     };
     // Let an in-flight sidecar flush finish so it can't race the final save/removal.
-    while flushing {
-        match ev_rx.recv().await {
-            Some(Event::Flushed(_)) | None => flushing = false,
-            Some(_) => {}
+    if let Some(h) = flush_task {
+        let flushed = h.await.map_err(EngineError::from).and_then(|r| r);
+        match (&result, flushed) {
+            (Ok(()), Err(e)) => return Err(e),
+            (Err(e), Err(fe)) => tracing::error!(error = %fe, "sidecar flush failed while tearing down after: {e}"),
+            (_, Ok(())) => {}
         }
     }
     result
+}
+
+/// Resolves with the running flush's result; never resolves when none is running.
+async fn join_flush(task: &mut Option<tokio::task::JoinHandle<Result<()>>>) -> std::result::Result<Result<()>, tokio::task::JoinError> {
+    match task {
+        Some(h) => h.await,
+        None => std::future::pending().await,
+    }
 }
 
 /// Takes sole ownership of a staged file, waiting for straggling blocking writes
@@ -555,7 +592,7 @@ async fn finalize(inc: &mut Incoming, manifest: &Manifest, dest: &Path, staging:
     let files = manifest.files.clone();
     let rels = inc.rels.clone();
     let dests = inc.dests.clone();
-    let pieces: Vec<Vec<[u8; 32]>> = inc.pieces.iter().map(|p| p.iter().map(|h| h.unwrap_or([0; 32])).collect()).collect();
+    let pieces: Vec<Vec<[u8; 32]>> = inc.pieces.iter().map(|p| p.iter().map(|h| h.ok_or_else(|| EngineError::Internal("finalizing with a missing piece hash".into()))).collect::<Result<_>>()).collect::<Result<_>>()?;
     let dest = dest.to_path_buf();
     let staging = staging.to_path_buf();
     let state = inc.state.clone();

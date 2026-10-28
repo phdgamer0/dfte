@@ -125,18 +125,26 @@ fn parse_size(s: &str) -> Result<u64, String> {
 /// Terminal SAS prompt (manual §12.1): both users compare the 6 digits.
 struct PromptVerifier;
 
-impl PeerVerifier for PromptVerifier {
-    fn verify(&self, peer: &PeerAuth) -> bool {
+impl PromptVerifier {
+    fn ask(peer: &PeerAuth) -> std::io::Result<bool> {
         use std::io::{BufRead, Write};
         let mut err = std::io::stderr();
-        let _ = writeln!(err, "\nPeer \"{}\"  fingerprint {}", peer.device_name, peer.fingerprint);
-        let _ = write!(err, "Security code: {}\nDoes the other device show the same code? [y/N] ", peer.sas);
-        let _ = err.flush();
+        writeln!(err, "\nPeer \"{}\"  fingerprint {}", peer.device_name, peer.fingerprint)?;
+        write!(err, "Security code: {}\nDoes the other device show the same code? [y/N] ", peer.sas)?;
+        err.flush()?;
         let mut line = String::new();
-        if std::io::stdin().lock().read_line(&mut line).is_err() {
-            return false;
-        }
-        matches!(line.trim().to_ascii_lowercase().as_str(), "y" | "yes")
+        std::io::stdin().lock().read_line(&mut line)?;
+        Ok(matches!(line.trim().to_ascii_lowercase().as_str(), "y" | "yes"))
+    }
+}
+
+impl PeerVerifier for PromptVerifier {
+    fn verify(&self, peer: &PeerAuth) -> bool {
+        // Fail closed: if the user can't be asked, the peer is not verified.
+        Self::ask(peer).unwrap_or_else(|e| {
+            eprintln!("cannot prompt for confirmation ({e}); rejecting peer");
+            false
+        })
     }
 }
 
@@ -160,6 +168,7 @@ fn print_report(r: &TransferReport) {
 
 #[tokio::main]
 async fn main() {
+    // No/invalid RUST_LOG simply means the default "warn" filter.
     tracing_subscriber::fmt().with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "warn".into())).with_writer(std::io::stderr).init();
     let cli = Cli::parse();
     if let Err(e) = run(cli).await {
@@ -301,8 +310,8 @@ async fn loopback_once(root: &Path, i: usize, paths: &[PathBuf], streams: usize,
     let sender = send_files(&TcpTransport::default(), addr, paths, &sopts).await?;
     let receiver = rx.await??;
     // Free the space before the next repetition.
-    let _ = std::fs::remove_dir_all(&out);
-    let _ = std::fs::remove_dir_all(&staging);
+    std::fs::remove_dir_all(&out)?;
+    std::fs::remove_dir_all(&staging)?;
     Ok(LoopbackRun { sender, receiver })
 }
 

@@ -109,12 +109,14 @@ pub(crate) fn build_source_blocking(paths: &[PathBuf], threads: usize) -> Result
         };
         let meta = std::fs::metadata(&path)?;
         let size = meta.len();
+        // `modified()` is unsupported on some platforms; then only size guards changes.
         let modified = meta.modified().ok();
         let (root, pieces) = hash_file_parallel_blocking(&path, threads)?;
         if pieces.len() as u64 != storage::chunk_count(size).max(1) {
             return Err(EngineError::SourceFileChanged { path });
         }
         let mut entry = FileEntry::file(rel, size, root).map_err(|e| EngineError::InvalidInput(e.to_string()))?;
+        // Best-effort metadata (manual §17): pre-1970 or absurd mtimes become 0/MAX.
         entry.modified_time = modified.and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX));
         files.push(entry);
         sources.push(SourceFile { path: Some(path), size, modified, pieces });
@@ -161,6 +163,7 @@ impl Readers {
         }
         let path = f.path.as_ref().ok_or_else(|| EngineError::Internal("chunk read from a directory entry".into()))?;
         let reader = ChunkReader::open_blocking(path)?;
+        // Same platform caveat as in `build_source_blocking`: compared as Option.
         let modified = std::fs::metadata(path)?.modified().ok();
         if reader.size() != f.size || modified != f.modified {
             return Err(EngineError::SourceFileChanged { path: path.clone() });

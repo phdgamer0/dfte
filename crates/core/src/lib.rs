@@ -12,6 +12,7 @@ pub mod report;
 pub mod secure;
 mod sender;
 mod source;
+mod tasks;
 
 pub use crypto::DeviceIdentity;
 pub use error::{EngineError, Result};

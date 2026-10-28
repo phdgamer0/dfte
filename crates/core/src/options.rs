@@ -149,6 +149,7 @@ impl fmt::Debug for CommonOptions {
 }
 
 fn default_device_name() -> String {
+    // A missing/non-UTF-8 HOSTNAME just means the generic default name.
     std::env::var("HOSTNAME").ok().filter(|s| !s.is_empty()).unwrap_or_else(|| "dfte".to_owned())
 }
 

@@ -123,7 +123,10 @@ pub enum Message<'a> {
     HelloAck(HelloAck),
     /// Opaque Noise handshake message (manual §12.1).
     Handshake(&'a [u8]),
-    ChunkData { chunk: ChunkHeader, data: &'a [u8] },
+    ChunkData {
+        chunk: ChunkHeader,
+        data: &'a [u8],
+    },
     ChunkAck(ChunkAck),
     SelectiveNack(SelectiveNack),
     ManifestOffer(Manifest),

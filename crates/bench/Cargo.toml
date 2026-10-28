@@ -17,6 +17,8 @@ workspace = true
 [[bin]]
 name = "engine-bench"
 path = "src/main.rs"
+# Criterion flags reach every bench target; this binary has no benches.
+bench = false
 
 [dependencies]
 # The bench is the only crate allowed to enable the plaintext mode (§30 #2).

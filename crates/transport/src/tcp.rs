@@ -112,21 +112,35 @@ impl Listener for TcpListener {
             let (mut s, peer) = self.inner.accept().await?;
             let timeout = self.config.group_timeout;
             let mut p = [0u8; PREAMBLE_LEN];
+            // Rejected sockets are dropped on purpose so one bad peer can't take
+            // the listener down (manual §34); each drop is logged, not silent.
             match tokio::time::timeout(timeout, s.read_exact(&mut p)).await {
                 Ok(Ok(_)) => {}
-                _ => continue,
+                Ok(Err(e)) => {
+                    tracing::debug!(%peer, error = %e, "dropping socket: preamble read failed");
+                    continue;
+                }
+                Err(_) => {
+                    tracing::debug!(%peer, "dropping socket: preamble timed out");
+                    continue;
+                }
             }
-            let Some((token, index, total)) = parse_preamble(&p) else { continue };
+            let Some((token, index, total)) = parse_preamble(&p) else {
+                tracing::debug!(%peer, "dropping socket: bad preamble");
+                continue;
+            };
             s.set_nodelay(true)?;
 
             let now = Instant::now();
             self.pending.retain(|_, g| now.duration_since(g.started) < timeout);
             if !self.pending.contains_key(&token) && self.pending.len() >= MAX_PENDING_GROUPS {
+                tracing::warn!(%peer, "dropping socket: too many half-open connections");
                 continue;
             }
             let group = self.pending.entry(token).or_insert_with(|| Group { started: now, peer, slots: (0..total).map(|_| None).collect() });
             // A token is only valid from one peer IP and one declared size.
             if group.peer.ip() != peer.ip() || group.slots.len() != total as usize || group.slots[index as usize].is_some() {
+                tracing::debug!(%peer, "dropping socket: preamble conflicts with its group");
                 continue;
             }
             group.slots[index as usize] = Some(s);

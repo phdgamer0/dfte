@@ -39,7 +39,8 @@ impl StagedFile {
         let staging_path = staging_path(staging_dir, name)?;
         std::fs::create_dir_all(staging_dir)?;
         // Any stale staged file of the same name is about to be replaced, so its
-        // allocated bytes count as reclaimable.
+        // allocated bytes count as reclaimable. A metadata error (missing file or
+        // otherwise) counts as 0 reclaimable: the space check only gets stricter.
         let reclaimable = std::fs::symlink_metadata(&staging_path).ok().filter(|m| m.is_file()).map_or(0, |m| m.len());
         ensure_space(staging_dir, size.saturating_sub(reclaimable))?;
         let file = OpenOptions::new().read(true).write(true).create(true).truncate(true).open(&staging_path)?;

@@ -447,10 +447,13 @@ impl Shared {
             return;
         }
         tracing::debug!(id = %job.id, from = ?g.state, to = ?state, "transfer state");
-        g.state = state;
-        if !state.is_active() {
+        if state == TransferState::Transferring {
+            // Seed the window so the first tick already yields a rate.
+            g.start_rate(Instant::now(), job.bytes_done.load(Ordering::Relaxed));
+        } else if !state.is_active() {
             g.clear_rate();
         }
+        g.state = state;
         self.publish_state(job, &mut g);
     }
 

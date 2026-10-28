@@ -149,11 +149,31 @@ impl Inner {
         self.samples.clear();
         self.throughput = 0;
     }
+
+    /// Entering Transferring: seed the window with the starting point, so the
+    /// first tick already yields a rate. A short data phase may only ever see one
+    /// tick, and a single sample can't produce a rate (seen on CI: 64 MiB
+    /// "Transferring" at 0 B/s).
+    pub fn start_rate(&mut self, now: Instant, bytes: u64) {
+        self.samples.clear();
+        self.samples.push_back((now, bytes));
+        self.throughput = 0;
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn first_tick_after_start_reports_a_rate() {
+        let job = Job::new("j".into(), 0, Direction::Send, TransportKind::Tcp, None, TransferState::Transferring);
+        let mut g = job.lock();
+        let t0 = Instant::now();
+        // Without the seed, one sample yields 0; with it, the first tick has a rate.
+        g.start_rate(t0, 0);
+        assert_eq!(g.sample(t0 + Duration::from_millis(100), 50_000_000), 500_000_000);
+    }
 
     #[test]
     fn rolling_rate_covers_about_one_second() {

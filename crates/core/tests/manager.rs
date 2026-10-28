@@ -564,8 +564,12 @@ async fn progress_rate_is_capped_per_transfer() {
     // 100 ms interval → ≤ 10 Hz, plus the final snapshot.
     let bound = (took.as_millis() / 100) as usize + 2;
     assert!(p.len() <= bound, "{} progress callbacks in {took:?}", p.len());
-    // While transferring, the rolling throughput is reported.
-    assert!(p.iter().any(|t| t.state == TransferState::Transferring && t.throughput_bytes_per_sec > 0) || took < Duration::from_millis(300), "no throughput in {p:?}");
+    // While transferring, the rolling rate is reported from the first tick (the
+    // window is seeded when Transferring starts). A fast runner can move all
+    // 64 MiB within one or two ticks; it used to report 0 B/s there. If the whole
+    // data phase fell between ticks there are no Transferring snapshots to check.
+    let transferring: Vec<_> = p.iter().filter(|t| t.state == TransferState::Transferring).collect();
+    assert!(transferring.is_empty() || transferring.iter().any(|t| t.throughput_bytes_per_sec > 0), "no throughput in {p:?}");
 
     tx_node.m.shutdown().await.unwrap();
     rx_node.m.shutdown().await.unwrap();

@@ -38,5 +38,24 @@ fn seal_4mib(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, seal_4mib);
+/// Full Noise_XX exchange + key derivation: the per-connection startup cost (manual §30).
+fn handshake(c: &mut Criterion) {
+    let a = DeviceIdentity::generate().unwrap();
+    let b = DeviceIdentity::generate().unwrap();
+    c.bench_function("handshake/noise_xx_full", |bench| {
+        bench.iter(|| {
+            let mut init = Handshake::initiator(&a).unwrap();
+            let mut resp = Handshake::responder(&b).unwrap();
+            let m1 = init.write_message(&[]).unwrap();
+            resp.read_message(&m1).unwrap();
+            let m2 = resp.write_message(&[]).unwrap();
+            init.read_message(&m2).unwrap();
+            let m3 = init.write_message(&[]).unwrap();
+            resp.read_message(&m3).unwrap();
+            (init.into_session(CipherSuite::Aes256Gcm).unwrap(), resp.into_session(CipherSuite::Aes256Gcm).unwrap())
+        })
+    });
+}
+
+criterion_group!(benches, seal_4mib, handshake);
 criterion_main!(benches);

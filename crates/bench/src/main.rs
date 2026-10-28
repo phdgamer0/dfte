@@ -162,7 +162,7 @@ const MIB: f64 = 1024.0 * 1024.0;
 fn print_report(r: &TransferReport) {
     let t = &r.timings;
     println!("{:?}: {} entries, {:.1} MiB ({:.1} MiB resumed) via {} x{} [{}] peer {}", r.direction, r.files, r.bytes_total as f64 / MIB, r.resumed_bytes as f64 / MIB, r.transport, r.streams, r.cipher, r.peer_fingerprint);
-    println!("  throughput {:.1} MiB/s ({:.2} Gbit/s), retransmits {}", r.throughput_bytes_per_sec / MIB, r.throughput_bytes_per_sec * 8.0 / 1e9, r.retransmits);
+    println!("  throughput {:.1} MiB/s ({:.2} Gbit/s), end-to-end incl. fsync {:.1} MiB/s, retransmits {}", r.throughput_bytes_per_sec / MIB, r.throughput_bytes_per_sec * 8.0 / 1e9, r.end_to_end_bytes_per_sec / MIB, r.retransmits);
     println!("  phases: hash {:.3}s  connect {:.3}s  handshake {:.3}s  manifest {:.3}s  transfer {:.3}s  finalize {:.3}s  total {:.3}s", t.hash_secs, t.connect_secs, t.handshake_secs, t.manifest_secs, t.transfer_secs, t.finalize_secs, r.total_secs);
 }
 

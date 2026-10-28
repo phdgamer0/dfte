@@ -328,7 +328,7 @@ async fn run(mut sc: SecureConnection, source: Source, opts: &SendOptions, mut t
     timings.finalize_secs = finalize_secs;
     timings.transfer_secs = secs(t.elapsed()) - finalize_secs;
     let bytes_transferred = bytes_total - plan.resumed_bytes;
-    let report = TransferReport { direction: Direction::Send, transfer_id, peer_fingerprint: peer.fingerprint, peer_name: peer.device_name, transport: kind_name(kind), cipher, streams, files: file_count, bytes_total, bytes_transferred, resumed_bytes: plan.resumed_bytes, chunks: plan.total_chunks, retransmits, total_secs: secs(started.elapsed()), throughput_bytes_per_sec: rate(bytes_transferred, timings.transfer_secs), timings, saved: Vec::new() };
+    let report = TransferReport { direction: Direction::Send, transfer_id, peer_fingerprint: peer.fingerprint, peer_name: peer.device_name, transport: kind_name(kind), cipher, streams, files: file_count, bytes_total, bytes_transferred, resumed_bytes: plan.resumed_bytes, chunks: plan.total_chunks, retransmits, total_secs: secs(started.elapsed()), throughput_bytes_per_sec: rate(bytes_transferred, timings.transfer_secs), end_to_end_bytes_per_sec: rate(bytes_transferred, timings.transfer_secs + timings.finalize_secs), timings, saved: Vec::new() };
     tracing::info!(bytes = report.bytes_transferred, secs = report.timings.transfer_secs, retransmits, "send complete");
     Ok(report)
 }

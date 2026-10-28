@@ -25,11 +25,11 @@ use protocol::state::Role;
 use protocol::state::transfer::{Transfer, TransferEvent};
 use protocol::{MsgType, header::Header};
 use storage::fileio::available_space_blocking;
-use storage::{BufferPool, CHUNK_SIZE, ChunkReader, RelPath, ResumeFile, ResumeState, StagedFile, StorageError, piece_hash, safe_join_blocking, scan_orphans_blocking, staging_name};
+use storage::{BufferPool, CHUNK_SIZE, ChunkReader, PoolBuffer, RelPath, ResumeFile, ResumeState, StagedFile, StorageError, piece_hash, safe_join_blocking, scan_orphans_blocking, staging_name};
 use tokio::sync::mpsc;
 use tokio::task::JoinSet;
 use tracing::Instrument;
-use transport::{FrameReader, Listener};
+use transport::Listener;
 
 use crate::error::{EngineError, Result};
 use crate::options::{Progress, ReceiveOptions};
@@ -208,28 +208,69 @@ struct FileInfo {
     staged: Option<Arc<StagedFile>>,
 }
 
+/// One data stream, as two pipelined stages so socket reads overlap AEAD work:
+/// this task reads frame bodies straight into pool buffers; [`open_and_store`]
+/// (its own task, so it runs on another worker) opens them in order and hands
+/// them to hash+pwrite jobs.
 async fn data_reader(ds: DataStream, pool: BufferPool, files: Arc<Vec<FileInfo>>, events: mpsc::Sender<Event>) -> Result<()> {
-    let DataStream { stream_id, mut reader, mut opener, .. } = ds;
+    let DataStream { stream_id, mut reader, opener, .. } = ds;
     let overhead = CHUNK_HEADER_LEN + if opener.is_some() { TAG_LEN } else { 0 };
+    let (tx, rx) = mpsc::channel::<(Header, PoolBuffer)>(2);
+    let mut stage: JoinSet<Result<()>> = JoinSet::new();
+    stage.spawn(open_and_store(opener, rx, files, events).in_current_span());
+
+    let net = async move {
+        let tx = tx;
+        while let Some(h) = reader.read_header().await? {
+            let body_len = h.payload_length as usize;
+            if h.msg_type != MsgType::ChunkData || h.stream_id != stream_id || body_len < overhead || body_len > BODY_CAPACITY {
+                return Err(EngineError::violation(format!("bad frame on data stream {stream_id}: {:?}", h.msg_type)));
+            }
+            let mut buf = pool.acquire().await;
+            reader.read_body_into(&h, buf.full_mut()).await?;
+            if tx.send((h, buf)).await.is_err() {
+                // The open stage stopped; its own result is collected below.
+                break;
+            }
+        }
+        Ok(())
+    };
+    tokio::pin!(net);
+    tokio::select! {
+        r = &mut net => {
+            r?;
+            // `net` finished and dropped its sender: the stage drains and ends.
+            join_stage(&mut stage).await
+        }
+        r = stage.join_next() => match r {
+            Some(r) => r?,
+            None => Err(EngineError::Internal("open stage missing".into())),
+        },
+    }
+}
+
+async fn join_stage(stage: &mut JoinSet<Result<()>>) -> Result<()> {
+    match stage.join_next().await {
+        Some(r) => r?,
+        None => Err(EngineError::Internal("open stage missing".into())),
+    }
+}
+
+/// Opens (verifies + decrypts, replay-checked) each body in place, validates the
+/// chunk against the manifest and spawns its hash+pwrite job.
+async fn open_and_store(mut opener: Option<Opener>, mut rx: mpsc::Receiver<(Header, PoolBuffer)>, files: Arc<Vec<FileInfo>>, events: mpsc::Sender<Event>) -> Result<()> {
     // Hash+pwrite jobs; reaped as they finish so a panicking write surfaces as
     // an error instead of a chunk that silently never gets acked.
     let mut writes: JoinSet<()> = JoinSet::new();
-    loop {
+    while let Some((h, mut buf)) = rx.recv().await {
         while let Some(r) = writes.try_join_next() {
             r?;
         }
-        let Some(h) = reader.read_header().await? else {
-            while let Some(r) = writes.join_next().await {
-                r?;
-            }
-            return Ok(());
-        };
         let body_len = h.payload_length as usize;
-        if h.msg_type != MsgType::ChunkData || h.stream_id != stream_id || body_len < overhead || body_len > BODY_CAPACITY {
-            return Err(EngineError::violation(format!("bad frame on data stream {stream_id}: {:?}", h.msg_type)));
-        }
-        let mut buf = pool.acquire().await;
-        let plain_len = read_and_open(&mut reader, &mut opener, &h, buf.full_mut()).await?;
+        let plain_len = match opener.as_mut() {
+            Some(o) => o.open_in_place(h.sequence_number, &h.to_bytes(), &mut buf.full_mut()[..body_len])?.len(),
+            None => body_len,
+        };
         let ch = ChunkHeader::decode(&buf.full_mut()[..CHUNK_HEADER_LEN])?;
         let info = files.get(ch.file_index as usize).ok_or_else(|| EngineError::violation("chunk for unknown file"))?;
         let index = u64::from(ch.chunk_index);
@@ -263,16 +304,10 @@ async fn data_reader(ds: DataStream, pool: BufferPool, files: Arc<Vec<FileInfo>>
             }
         });
     }
-}
-
-/// Reads a frame body into `dst` and, unless the stream is plaintext, opens it in
-/// place. Returns the plaintext length.
-async fn read_and_open(reader: &mut FrameReader, opener: &mut Option<Opener>, h: &Header, dst: &mut [u8]) -> Result<usize> {
-    let body = reader.read_body_into(h, dst).await?;
-    Ok(match opener {
-        Some(o) => o.open_in_place(h.sequence_number, &h.to_bytes(), body)?.len(),
-        None => body.len(),
-    })
+    while let Some(r) = writes.join_next().await {
+        r?;
+    }
+    Ok(())
 }
 
 async fn wait_offer(sc: &mut SecureConnection, opts: &ReceiveOptions) -> Result<Manifest> {
@@ -384,7 +419,7 @@ async fn run(mut sc: SecureConnection, staging: PathBuf, dest: PathBuf, opts: &R
             let bytes_transferred = bytes_total - inc.resumed_bytes;
             let chunks = manifest.files.iter().map(|f| u64::from(f.chunk_count)).sum::<u64>();
             tracing::info!(bytes = bytes_transferred, secs = transfer_secs, "receive complete");
-            Ok(TransferReport { direction: Direction::Receive, transfer_id: manifest.transfer_id.to_string(), peer_fingerprint: peer.fingerprint, peer_name: peer.device_name, transport: kind_name(kind), cipher, streams, files: manifest.files.len(), bytes_total, bytes_transferred, resumed_bytes: inc.resumed_bytes, chunks, retransmits: 0, total_secs: secs(started.elapsed()), throughput_bytes_per_sec: rate(bytes_transferred, transfer_secs), timings, saved })
+            Ok(TransferReport { direction: Direction::Receive, transfer_id: manifest.transfer_id.to_string(), peer_fingerprint: peer.fingerprint, peer_name: peer.device_name, transport: kind_name(kind), cipher, streams, files: manifest.files.len(), bytes_total, bytes_transferred, resumed_bytes: inc.resumed_bytes, chunks, retransmits: 0, total_secs: secs(started.elapsed()), throughput_bytes_per_sec: rate(bytes_transferred, transfer_secs), end_to_end_bytes_per_sec: rate(bytes_transferred, transfer_secs + timings.finalize_secs), timings, saved })
         }
         Err(e) => {
             if let Err(se) = xfer.on_event(TransferEvent::IntegrityFailure) {
@@ -418,7 +453,7 @@ async fn drive(control_tx: &mut ControlTx, control_rx: crate::secure::ControlRx,
     let (ev_tx, mut ev_rx) = mpsc::channel::<Event>(1024);
     let infos: Vec<FileInfo> = manifest.files.iter().zip(&inc.staged).map(|(f, s)| FileInfo { size: f.size, chunks: u64::from(f.chunk_count), staged: s.clone() }).collect();
     let infos = Arc::new(infos);
-    let pool = BufferPool::new(opts.pool_buffers.max(2 * data.len()), BODY_CAPACITY);
+    let pool = BufferPool::new(opts.pool_buffers.max(4 * data.len()), BODY_CAPACITY);
     for ds in data {
         let events = ev_tx.clone();
         let fut = data_reader(ds, pool.clone(), Arc::clone(&infos), ev_tx.clone());

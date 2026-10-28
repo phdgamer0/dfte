@@ -52,8 +52,11 @@ pub struct TransferReport {
     /// Chunks resent after an integrity NACK or ack timeout (manual §9.3).
     pub retransmits: u64,
     pub total_secs: f64,
-    /// `bytes_transferred / transfer_secs`.
+    /// `bytes_transferred / transfer_secs`: network + crypto + page-cache rate.
     pub throughput_bytes_per_sec: f64,
+    /// `bytes_transferred / (transfer_secs + finalize_secs)`: includes the final
+    /// fsync, so on a slow disk this is the number a user actually experiences.
+    pub end_to_end_bytes_per_sec: f64,
     pub timings: PhaseTimings,
     /// Receiver: final locations of the received entries.
     pub saved: Vec<PathBuf>,

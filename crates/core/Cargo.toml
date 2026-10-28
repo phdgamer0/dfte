@@ -7,6 +7,10 @@ license.workspace = true
 repository.workspace = true
 publish = false
 
+# Criterion flags reach every bench target; the libtest harness rejects them.
+[lib]
+bench = false
+
 [lints]
 workspace = true
 

@@ -37,7 +37,9 @@ jobs:
       - name: Run benches
         run: |
           if [ "${{ github.event_name }}" = "pull_request" ] && [ -d target/criterion ]; then
-            ARGS="--baseline main"
+            # Lenient: benches added by this PR have no main baseline yet;
+            # strict --baseline panics on them.
+            ARGS="--baseline-lenient main"
           else
             ARGS="--save-baseline main"
           fi

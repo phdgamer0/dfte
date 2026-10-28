@@ -31,6 +31,9 @@ struct Cli {
     /// Print machine-readable JSON instead of the human summary.
     #[arg(long, global = true)]
     json: bool,
+    /// Sender: cache file hashes here so unchanged files aren't re-hashed (manual §19).
+    #[arg(long, global = true)]
+    hash_cache: Option<PathBuf>,
     /// QUIC loss detection: reordering tolerance in packets (RFC 9002 default 3).
     #[arg(long, global = true)]
     quic_packet_threshold: Option<u32>,
@@ -191,6 +194,7 @@ async fn main() {
 
 async fn run(cli: Cli) -> Result<(), BoxError> {
     let qcfg = quic_config(cli.quic_packet_threshold, cli.quic_time_threshold);
+    let hash_cache = cli.hash_cache.clone();
     match cli.cmd {
         Cmd::Recv { listen, staging, out, trust_any, max_streams, transport, allow_plaintext } => {
             let mut opts = ReceiveOptions::new(identity()?, verifier(trust_any));
@@ -207,6 +211,7 @@ async fn run(cli: Cli) -> Result<(), BoxError> {
             let mut opts = SendOptions::new(identity()?, verifier(trust_any));
             opts.streams = streams;
             opts.in_flight_chunks = in_flight;
+            opts.hash_cache_dir = hash_cache.clone();
             opts.insecure_plaintext = plaintext;
             eprintln!("this device: {}", opts.common.identity.fingerprint());
             let r = match transport {
@@ -226,7 +231,7 @@ async fn run(cli: Cli) -> Result<(), BoxError> {
             }
             let mut runs = Vec::new();
             for i in 0..repeat.max(1) {
-                let run = loopback_once(root.path(), i, transport, &qcfg, &paths, streams, plaintext, in_flight, recv_buffers).await?;
+                let run = loopback_once(root.path(), i, transport, &qcfg, hash_cache.as_deref(), &paths, streams, plaintext, in_flight, recv_buffers).await?;
                 if !cli.json {
                     println!("--- run {} ({}, {})", i + 1, if in_memory { "tmpfs" } else { "disk" }, if plaintext { "plaintext" } else { "encrypted" });
                     print_report(&run.sender);
@@ -308,7 +313,7 @@ fn generate(dir: &Path, size: u64, files: usize) -> Result<Vec<PathBuf>, BoxErro
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn loopback_once(root: &Path, i: usize, transport: TransportArg, qcfg: &QuicConfig, paths: &[PathBuf], streams: usize, plaintext: bool, in_flight: usize, recv_buffers: usize) -> Result<LoopbackRun, BoxError> {
+async fn loopback_once(root: &Path, i: usize, transport: TransportArg, qcfg: &QuicConfig, hash_cache: Option<&Path>, paths: &[PathBuf], streams: usize, plaintext: bool, in_flight: usize, recv_buffers: usize) -> Result<LoopbackRun, BoxError> {
     let staging = root.join(format!("staging-{i}"));
     let out = root.join(format!("out-{i}"));
     let mut ropts = ReceiveOptions::new(identity()?, Arc::new(TrustAny));
@@ -317,6 +322,7 @@ async fn loopback_once(root: &Path, i: usize, transport: TransportArg, qcfg: &Qu
     let mut sopts = SendOptions::new(identity()?, Arc::new(TrustAny));
     sopts.streams = streams;
     sopts.in_flight_chunks = in_flight;
+    sopts.hash_cache_dir = hash_cache.map(Path::to_path_buf);
     sopts.insecure_plaintext = plaintext;
     // Each side's QUIC endpoint presents that side's engine identity, which the
     // engine cross-checks against the Noise handshake.

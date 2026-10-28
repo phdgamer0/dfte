@@ -5,6 +5,9 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+  # Nightly run keeps macOS covered without spending macOS minutes on every PR.
+  schedule:
+    - cron: "0 2 * * *"
 
 # Every `run:` step fails on any error, unset variable, or failure inside a
 # pipeline (e.g. `cargo ... | tee`), so no error is swallowed.
@@ -53,10 +56,27 @@ jobs:
   test:
     name: test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.98.1
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --workspace --all-targets
+      - run: cargo test --workspace --doc
+
+  # macOS runs on pushes to main, nightly and on demand, not on PRs: GitHub's
+  # macOS arm64 pool is capacity-constrained (jobs were cancelled unacquired
+  # after 15 min) and macOS minutes cost 10x on this private repo. A macOS
+  # regression still surfaces within a day.
+  test-macos:
+    name: test (macos-latest)
+    if: github.event_name != 'pull_request'
+    runs-on: macos-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.98.1

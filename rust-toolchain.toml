@@ -1,0 +1,4 @@
+# see manual §4/§46: pinned toolchain, bump deliberately in its own PR
+[toolchain]
+channel = "1.98.1"
+components = ["rustfmt", "clippy"]

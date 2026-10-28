@@ -1,7 +1,9 @@
 /target
+/.claude
 *.a
 *.bin
 *.o
 *.py
 *.sh
 *.test
+*.md

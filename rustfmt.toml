@@ -1,0 +1,8 @@
+# Mirrors the maintainer's ~/.rustfmt.toml (stable options only) so CI's
+# `cargo fmt --check` agrees with local formatting.
+edition = "2024"
+tab_spaces = 4
+hard_tabs = false
+fn_params_layout = "Compressed"
+fn_call_width = 10000000
+max_width = 1000000000

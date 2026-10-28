@@ -10,4 +10,22 @@ publish = false
 [lints]
 workspace = true
 
+[features]
+default = []
+# Benchmark-only (manual §30 #2): lets both peers agree to send data-stream
+# bodies without AEAD. Never enabled by default; only the bench crate turns it on.
+bench-insecure-plaintext = []
+
 [dependencies]
+protocol.workspace = true
+crypto.workspace = true
+storage.workspace = true
+transport.workspace = true
+tokio = { workspace = true, features = ["rt", "sync", "time", "macros"] }
+tracing.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "sync", "time", "macros", "net", "io-util"] }
+tempfile.workspace = true

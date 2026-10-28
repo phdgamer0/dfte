@@ -3,14 +3,25 @@
 //! A [`Connection`] is one control stream plus N data streams (manual §11:
 //! 2–4 parallel streams). Both backends hand back the same shape, so `core`
 //! and the shared conformance tests never care which one is underneath.
+//!
+//! # Peer identity
+//! [`Connection::peer_key`] is the peer's Ed25519 identity key *as authenticated
+//! by the transport*: `Some` on QUIC, where TLS 1.3 with self-signed identity
+//! certificates proves possession of the key (manual §12.1), and `None` on TCP,
+//! where the Noise_XX handshake runs above the transport and binds identity
+//! itself. The transport never decides whether the key is the *right* peer —
+//! `core` compares it against the SAS-confirmed / QR-scanned / pinned fingerprint
+//! (see [`Connection::peer_fingerprint`]).
 
 use std::future::Future;
 use std::net::SocketAddr;
 
 pub mod framed;
+pub mod quic;
 pub mod tcp;
 
 pub use framed::{FrameReader, FrameWriter, FramedStream};
+pub use quic::{CongestionControl, QuicConfig, QuicListener, QuicTransport};
 pub use tcp::{TcpConfig, TcpListener, TcpTransport};
 
 pub type Result<T> = std::result::Result<T, TransportError>;
@@ -36,6 +47,20 @@ pub enum TransportError {
     InvalidStreamCount(usize),
     #[error("timed out")]
     Timeout,
+    #[error("listener closed")]
+    Closed,
+    #[error("invalid transport config: {0}")]
+    InvalidConfig(&'static str),
+    #[error("tls: {0}")]
+    Tls(#[from] rustls::Error),
+    #[error("certificate generation: {0}")]
+    Certificate(#[from] rcgen::Error),
+    #[error("quic connect: {0}")]
+    QuicConnect(#[from] quinn::ConnectError),
+    #[error("quic connection: {0}")]
+    QuicConnection(#[from] quinn::ConnectionError),
+    #[error("peer presented no usable Ed25519 identity")]
+    PeerIdentity,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -49,10 +74,20 @@ pub const MAX_DATA_STREAMS: usize = 16;
 pub struct Connection {
     pub kind: TransportKind,
     pub peer: SocketAddr,
+    /// Peer's Ed25519 public key, authenticated by the transport (QUIC/TLS);
+    /// `None` on TCP, whose identity check is the Noise handshake above it.
+    pub peer_key: Option<[u8; 32]>,
     /// Handshake, manifest and acks.
     pub control: FramedStream,
     /// Bulk chunk streams.
     pub data: Vec<FramedStream>,
+}
+
+impl Connection {
+    /// Fingerprint of [`peer_key`](Self::peer_key), in the format users compare (manual §6).
+    pub fn peer_fingerprint(&self) -> Option<String> {
+        self.peer_key.as_ref().map(crypto::fingerprint_of)
+    }
 }
 
 pub trait Transport: Send + Sync {

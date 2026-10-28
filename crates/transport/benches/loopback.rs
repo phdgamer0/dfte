@@ -1,11 +1,17 @@
-//! Loopback framed throughput per backend and stream count (manual §11/§30).
-//! Measures the transport alone: no crypto, no disk.
+//! Loopback framed throughput per backend and stream count (manual §11/§30,
+//! benchmark #6 on loopback). Measures the transport alone: no app-level
+//! crypto, no disk. QUIC always encrypts (TLS 1.3 AEAD inside quinn) while TCP
+//! here is plaintext, so QUIC numbers include an AEAD cost the TCP path only
+//! pays later, above the transport.
 #![allow(clippy::unwrap_used)]
 
-use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
+use criterion::measurement::WallTime;
+use criterion::{BenchmarkGroup, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
+use crypto::DeviceIdentity;
 use protocol::MsgType;
 use protocol::header::Header;
-use transport::{Connection, Listener, TcpConfig, TcpTransport, Transport};
+use tokio::runtime::Runtime;
+use transport::{CongestionControl, Connection, Listener, QuicConfig, QuicTransport, TcpConfig, TcpTransport, Transport};
 
 const FRAME: usize = 4 * 1024 * 1024;
 const FRAMES: usize = 32; // 128 MiB per iteration
@@ -56,6 +62,25 @@ async fn blast(tx: &mut Connection, rx: &mut Connection, payload: &'static [u8])
     }
 }
 
+fn quic(cfg: QuicConfig) -> QuicTransport {
+    QuicTransport::new(&DeviceIdentity::generate().unwrap(), cfg).unwrap()
+}
+
+fn bulk<T: Transport>(g: &mut BenchmarkGroup<'_, WallTime>, rt: &Runtime, label: &str, t: &T, payload: &'static [u8]) {
+    for streams in [1usize, 2, 4] {
+        let (mut a, mut b) = rt.block_on(pair(t, streams));
+        g.bench_function(BenchmarkId::new(label, streams), |bch| {
+            bch.iter_custom(|iters| {
+                let start = std::time::Instant::now();
+                for _ in 0..iters {
+                    rt.block_on(blast(&mut a, &mut b, payload));
+                }
+                start.elapsed()
+            })
+        });
+    }
+}
+
 fn bench(c: &mut Criterion) {
     let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap();
     let payload: &'static [u8] = Box::leak(vec![7u8; FRAME].into_boxed_slice());
@@ -63,31 +88,26 @@ fn bench(c: &mut Criterion) {
     g.throughput(Throughput::Bytes((FRAME * FRAMES) as u64));
     g.sample_size(10);
     for (label, cfg) in [("autotune", TcpConfig::default()), ("buf4MiB", TcpConfig { send_buffer: Some(4 << 20), recv_buffer: Some(4 << 20), ..TcpConfig::default() })] {
-        for streams in [1usize, 2, 4] {
-            let t = TcpTransport::new(cfg);
-            let (mut a, mut b) = rt.block_on(pair(&t, streams));
-            g.bench_function(BenchmarkId::new(label, streams), |bch| {
-                bch.iter_custom(|iters| {
-                    let start = std::time::Instant::now();
-                    for _ in 0..iters {
-                        rt.block_on(blast(&mut a, &mut b, payload));
-                    }
-                    start.elapsed()
-                })
-            });
-        }
+        bulk(&mut g, &rt, label, &TcpTransport::new(cfg), payload);
+    }
+    g.finish();
+
+    let mut g = c.benchmark_group("quic_loopback_128MiB");
+    g.throughput(Throughput::Bytes((FRAME * FRAMES) as u64));
+    g.sample_size(10);
+    for (label, cfg) in [("cubic", QuicConfig::default()), ("bbr", QuicConfig { congestion: CongestionControl::Bbr, ..QuicConfig::default() }), ("cubic_osbuf", QuicConfig { socket_send_buffer: None, socket_recv_buffer: None, ..QuicConfig::default() })] {
+        bulk(&mut g, &rt, label, &quic(cfg), payload);
     }
     g.finish();
 }
 
 /// Control-path shape: many small frames (ChunkAck-sized) on one stream.
-fn small_frames(c: &mut Criterion) {
+fn small<T: Transport>(c: &mut Criterion, group: &str, t: &T) {
     const N: usize = 20_000;
     let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap();
-    let t = TcpTransport::default();
-    let (mut a, mut b) = rt.block_on(pair(&t, 1));
+    let (mut a, mut b) = rt.block_on(pair(t, 1));
     let body = [5u8; 64];
-    let mut g = c.benchmark_group("tcp_small_frames");
+    let mut g = c.benchmark_group(group);
     g.throughput(Throughput::Elements(N as u64));
     g.sample_size(10);
     g.bench_function("64B_x20k_queued", |bch| {
@@ -134,6 +154,11 @@ fn small_frames(c: &mut Criterion) {
         })
     });
     g.finish();
+}
+
+fn small_frames(c: &mut Criterion) {
+    small(c, "tcp_small_frames", &TcpTransport::default());
+    small(c, "quic_small_frames", &quic(QuicConfig::default()));
 }
 
 criterion_group!(benches, bench, small_frames);

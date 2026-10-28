@@ -92,7 +92,8 @@ pub struct QuicConfig {
     /// Path MTU discovery (probes up from `initial_mtu`).
     pub mtu_discovery: bool,
     pub initial_mtu: u16,
-    /// UDP socket buffers; `None` keeps the OS default.
+    /// UDP socket buffers; `None` keeps the OS default. The kernel silently caps
+    /// the request at `net.core.{r,w}mem_max` (4 MiB on the dev box).
     pub socket_send_buffer: Option<usize>,
     pub socket_recv_buffer: Option<usize>,
     /// Upper bound for keeping a connection alive after a writer is dropped, so its
@@ -112,8 +113,12 @@ impl Default for QuicConfig {
             handshake_timeout: Duration::from_secs(10),
             mtu_discovery: true,
             initial_mtu: 1200,
-            socket_send_buffer: None,
-            socket_recv_buffer: None,
+            // The default ~208 KiB receive buffer overflowed under a 4 MiB-chunk
+            // burst on loopback (~1.8k RcvbufErrors per bench run, each one a
+            // loss event that halves Cubic's window); 8 MiB requested
+            // (kernel-capped) brought that to 0. See the phase-5 perf notes.
+            socket_send_buffer: Some(8 << 20),
+            socket_recv_buffer: Some(8 << 20),
             linger: Duration::from_secs(10),
         }
     }
@@ -121,6 +126,7 @@ impl Default for QuicConfig {
 
 impl QuicConfig {
     fn transport(&self) -> Result<Arc<quinn::TransportConfig>> {
+        // Deliberate clamp: a window above the 2^62 varint limit just means "unbounded".
         let var = |v: u64| VarInt::from_u64(v).unwrap_or(VarInt::MAX);
         let mut t = quinn::TransportConfig::default();
         t.stream_receive_window(var(self.stream_receive_window))
@@ -446,12 +452,29 @@ impl AsyncWrite for QuicWriter {
 
 impl Drop for QuicWriter {
     fn drop(&mut self) {
-        let (Some(mut stream), Ok(rt)) = (self.stream.take(), tokio::runtime::Handle::try_current()) else { return };
+        let Some(mut stream) = self.stream.take() else { return };
+        let rt = match tokio::runtime::Handle::try_current() {
+            Ok(rt) => rt,
+            Err(e) => {
+                // Outside a runtime there is nothing to linger on; the stream's own
+                // Drop still finishes it, delivery then depends on the connection staying up.
+                tracing::debug!(error = %e, "quic: writer dropped outside a runtime, not lingering");
+                return;
+            }
+        };
         let linger = self.linger;
         rt.spawn(async move {
-            // Err = already finished/reset; either way wait for acks below.
-            let _ = stream.finish();
-            let _ = tokio::time::timeout(linger, stream.stopped()).await;
+            // ClosedStream here means the caller already finished (shutdown) or the
+            // stream was reset; both are expected, and stopped() below still applies.
+            if let Err(e) = stream.finish() {
+                tracing::trace!(error = %e, "quic: stream already finished");
+            }
+            match tokio::time::timeout(linger, stream.stopped()).await {
+                Ok(Ok(None)) => {}
+                Ok(Ok(Some(code))) => tracing::debug!(%code, "quic: peer stopped stream before reading it all"),
+                Ok(Err(e)) => tracing::debug!(error = %e, "quic: connection ended before stream data was acknowledged"),
+                Err(_) => tracing::debug!(?linger, "quic: linger expired before stream data was acknowledged"),
+            }
         });
     }
 }

@@ -160,7 +160,12 @@ enum Event {
     ControlEof,
     Sending(ChunkId),
     Written(ChunkId, PoolBuffer),
+    /// Control stream or engine failure: always fatal.
     Failed(EngineError),
+    /// A data-stream task failed. Fatal while chunks are in flight; once every
+    /// chunk is acknowledged the data streams carry nothing more, so it no
+    /// longer affects the outcome.
+    StreamFailed(EngineError),
 }
 
 pub(crate) async fn cancelled(c: &Option<CancelHandle>) {
@@ -234,7 +239,7 @@ fn spawn_reporting(set: &mut JoinSet<()>, events: &mpsc::UnboundedSender<Event>,
     set.spawn(
         async move {
             if let Err(e) = fut.await {
-                forward(&events, Event::Failed(e));
+                forward(&events, Event::StreamFailed(e));
             }
         }
         .in_current_span(),
@@ -483,7 +488,8 @@ async fn drive(control_tx: &mut crate::secure::ControlTx, control_rx: ControlRx,
             Event::Control(Control::Ping(_) | Control::Pong(_)) => last_heard = Instant::now(),
             Event::Control(other) => return Err(EngineError::violation(format!("unexpected {other:?} during transfer"))),
             Event::ControlEof => return Err(EngineError::PeerLost),
-            Event::Failed(e) => return Err(e),
+            // Chunks are still in flight: a broken data stream is fatal here.
+            Event::Failed(e) | Event::StreamFailed(e) => return Err(e),
         }
     }
     xfer.on_event(TransferEvent::AllChunksConfirmed)?;
@@ -506,6 +512,11 @@ async fn drive(control_tx: &mut crate::secure::ControlTx, control_rx: ControlRx,
             Event::Control(Control::Close(r)) => return Err(EngineError::from_peer_close(r)),
             Event::ControlEof => return Err(EngineError::PeerLost),
             Event::Failed(e) => return Err(e),
+            // Every chunk is acknowledged. On QUIC the receiver stops its data
+            // streams once it has everything (STOP_SENDING), and under loss that
+            // can overtake the retransmitted Close(Done) on the control stream.
+            // Keep waiting for the receiver's verdict.
+            Event::StreamFailed(e) => tracing::debug!(error = %e, "data stream closed by peer after all chunks were acknowledged"),
             _ => {}
         }
     }
@@ -516,12 +527,15 @@ async fn drive(control_tx: &mut crate::secure::ControlTx, control_rx: ControlRx,
         tracing::debug!(error = %e, "control half-close after completion failed");
     }
     // Everything else ends by itself now that the queue is closed (the control
-    // reader is finished by the caller). Reap them all (panics propagate) and
-    // surface any failure a stream task reported on the way out.
+    // reader is finished by the caller). Reap them all (panics propagate). The
+    // receiver has verified and committed every file, so a data stream failing
+    // while it is torn down can't change the outcome; it is logged, not returned.
     join_all(set).await?;
     while let Ok(ev) = ev_rx.try_recv() {
-        if let Event::Failed(e) = ev {
-            return Err(e);
+        match ev {
+            Event::Failed(e) => return Err(e),
+            Event::StreamFailed(e) => tracing::debug!(error = %e, "data stream failed during teardown after the receiver confirmed completion"),
+            _ => {}
         }
     }
     Ok((retransmits, finalize))

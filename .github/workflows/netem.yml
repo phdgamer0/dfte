@@ -1,0 +1,70 @@
+name: Network harness
+
+# see manual §31: netns + tc/netem loss/latency/reorder/duplication/rate matrix
+# over the real engine-bench sender/receiver, on every PR touching the
+# protocol/transport/crypto/engine path, plus nightly. Any failed run fails the job.
+on:
+  pull_request:
+    paths:
+      - "crates/protocol/**"
+      - "crates/transport/**"
+      - "crates/crypto/**"
+      - "crates/core/**"
+      - "crates/storage/**"
+      - "crates/bench/**"
+      - "tests/network-harness/**"
+      - "Cargo.lock"
+      - ".github/workflows/netem.yml"
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+# Every `run:` step fails on any error, unset variable, or failure inside a
+# pipeline, so no error is swallowed.
+defaults:
+  run:
+    shell: bash --noprofile --norc -euo pipefail {0}
+
+concurrency:
+  group: netem-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  netem:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.98.1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: netem
+      - name: Kernel modules (veth, sch_netem)
+        run: |
+          if ! sudo modprobe sch_netem; then
+            # Some runner kernels ship netem in the "extra" modules package.
+            sudo apt-get update
+            sudo apt-get install -y "linux-modules-extra-$(uname -r)"
+            sudo modprobe sch_netem
+          fi
+          sudo modprobe veth
+          ip -V
+          tc -V
+      - name: Build engine-bench + harness (release)
+        run: cargo build --release --locked -p bench -p netem-harness
+      - name: Run §31 matrix
+        run: |
+          sudo ./target/release/netem-harness --require-root \
+            --engine-bench target/release/engine-bench \
+            --work-dir "$RUNNER_TEMP/netem-work" \
+            --out-dir netem-results \
+            --summary "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: netem-results-${{ github.sha }}
+          path: netem-results
+          if-no-files-found: warn

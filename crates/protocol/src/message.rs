@@ -48,6 +48,7 @@ pub struct HelloAck {
 pub struct ChunkAck {
     pub file_index: u32,
     pub chunk_index: u32,
+    #[serde(with = "serde_bytes")]
     pub hash: [u8; 32],
 }
 

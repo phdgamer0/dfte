@@ -7,11 +7,38 @@ license.workspace = true
 repository.workspace = true
 publish = false
 
-# Criterion flags reach every bench target; the libtest harness rejects them.
+# cdylib: Android .so / Windows .dll; staticlib: iOS .xcframework (manual §4);
+# lib: Rust-side tests. Criterion flags reach every bench target; the libtest
+# harness rejects them.
 [lib]
+crate-type = ["cdylib", "staticlib", "lib"]
+bench = false
+
+# Generates Kotlin/Swift/... sources from the compiled library (library mode).
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+required-features = ["bindgen"]
 bench = false
 
 [lints]
 workspace = true
 
+[features]
+default = []
+# Pulls in uniffi's binding generator (clap, askama, ...) for the uniffi-bindgen binary only.
+bindgen = ["uniffi/cli"]
+
 [dependencies]
+dfte-core.workspace = true
+discovery.workspace = true
+transport.workspace = true
+uniffi.workspace = true
+async-trait.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tokio = { workspace = true, features = ["sync"] }
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "time", "sync"] }

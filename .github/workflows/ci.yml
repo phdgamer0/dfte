@@ -84,6 +84,45 @@ jobs:
       - run: cargo test --workspace --all-targets
       - run: cargo test --workspace --doc
 
+  bindings:
+    name: uniffi bindings (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        # macOS (for the swiftc parse) follows test-macos: not on PRs.
+        os: ${{ github.event_name == 'pull_request' && fromJSON('["ubuntu-latest"]') || fromJSON('["ubuntu-latest", "macos-latest"]') }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.98.1
+      - uses: Swatinem/rust-cache@v2
+      # Kotlin + Swift sources from the compiled library (library mode) into
+      # target/bindings, which is git-ignored. Generation must succeed on every
+      # runner; where swiftc exists (macOS) the Swift output is also parsed.
+      - name: Generate Kotlin and Swift bindings
+        run: |
+          cargo build -p platform-ffi
+          case "$RUNNER_OS" in
+            macOS) lib=target/debug/libplatform_ffi.dylib ;;
+            *) lib=target/debug/libplatform_ffi.so ;;
+          esac
+          rm -rf target/bindings
+          for lang in kotlin swift; do
+            cargo run -p platform-ffi --features bindgen --bin uniffi-bindgen -- generate --library "$lib" --language "$lang" --out-dir "target/bindings/$lang" --no-format
+          done
+          kt=target/bindings/kotlin/uniffi/platform_ffi/platform_ffi.kt
+          swift=target/bindings/swift/platform_ffi.swift
+          for f in "$kt" "$swift"; do
+            for sym in TransferManager TransferObserver PlatformDiscovery; do
+              grep -q "$sym" "$f" || { echo "::error::$sym missing from $f"; exit 1; }
+            done
+            echo "$f: $(wc -l <"$f") lines"
+          done
+          if command -v swiftc >/dev/null; then
+            swiftc -parse "$swift"
+          fi
+
   deny:
     name: licenses + advisories (cargo-deny)
     runs-on: ubuntu-latest

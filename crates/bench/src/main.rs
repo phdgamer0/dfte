@@ -31,6 +31,12 @@ struct Cli {
     /// Print machine-readable JSON instead of the human summary.
     #[arg(long, global = true)]
     json: bool,
+    /// QUIC loss detection: reordering tolerance in packets (RFC 9002 default 3).
+    #[arg(long, global = true)]
+    quic_packet_threshold: Option<u32>,
+    /// QUIC loss detection: time threshold as a multiple of RTT (default 1.125).
+    #[arg(long, global = true)]
+    quic_time_threshold: Option<f32>,
     #[command(subcommand)]
     cmd: Cmd,
 }
@@ -184,6 +190,7 @@ async fn main() {
 }
 
 async fn run(cli: Cli) -> Result<(), BoxError> {
+    let qcfg = quic_config(cli.quic_packet_threshold, cli.quic_time_threshold);
     match cli.cmd {
         Cmd::Recv { listen, staging, out, trust_any, max_streams, transport, allow_plaintext } => {
             let mut opts = ReceiveOptions::new(identity()?, verifier(trust_any));
@@ -192,7 +199,7 @@ async fn run(cli: Cli) -> Result<(), BoxError> {
             eprintln!("this device: {}", opts.common.identity.fingerprint());
             let r = match transport {
                 TransportArg::Tcp => recv_on(&TcpTransport::default(), listen, &staging, &out, &opts).await?,
-                TransportArg::Quic => recv_on(&quic(&opts.common.identity)?, listen, &staging, &out, &opts).await?,
+                TransportArg::Quic => recv_on(&quic(&opts.common.identity, &qcfg)?, listen, &staging, &out, &opts).await?,
             };
             emit(cli.json, &r, || print_report(&r))?;
         }
@@ -204,7 +211,7 @@ async fn run(cli: Cli) -> Result<(), BoxError> {
             eprintln!("this device: {}", opts.common.identity.fingerprint());
             let r = match transport {
                 TransportArg::Tcp => send_on(&TcpTransport::default(), target, &files, &opts).await?,
-                TransportArg::Quic => send_on(&quic(&opts.common.identity)?, target, &files, &opts).await?,
+                TransportArg::Quic => send_on(&quic(&opts.common.identity, &qcfg)?, target, &files, &opts).await?,
             };
             emit(cli.json, &r, || print_report(&r))?;
         }
@@ -219,7 +226,7 @@ async fn run(cli: Cli) -> Result<(), BoxError> {
             }
             let mut runs = Vec::new();
             for i in 0..repeat.max(1) {
-                let run = loopback_once(root.path(), i, transport, &paths, streams, plaintext, in_flight, recv_buffers).await?;
+                let run = loopback_once(root.path(), i, transport, &qcfg, &paths, streams, plaintext, in_flight, recv_buffers).await?;
                 if !cli.json {
                     println!("--- run {} ({}, {})", i + 1, if in_memory { "tmpfs" } else { "disk" }, if plaintext { "plaintext" } else { "encrypted" });
                     print_report(&run.sender);
@@ -301,7 +308,7 @@ fn generate(dir: &Path, size: u64, files: usize) -> Result<Vec<PathBuf>, BoxErro
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn loopback_once(root: &Path, i: usize, transport: TransportArg, paths: &[PathBuf], streams: usize, plaintext: bool, in_flight: usize, recv_buffers: usize) -> Result<LoopbackRun, BoxError> {
+async fn loopback_once(root: &Path, i: usize, transport: TransportArg, qcfg: &QuicConfig, paths: &[PathBuf], streams: usize, plaintext: bool, in_flight: usize, recv_buffers: usize) -> Result<LoopbackRun, BoxError> {
     let staging = root.join(format!("staging-{i}"));
     let out = root.join(format!("out-{i}"));
     let mut ropts = ReceiveOptions::new(identity()?, Arc::new(TrustAny));
@@ -315,7 +322,7 @@ async fn loopback_once(root: &Path, i: usize, transport: TransportArg, paths: &[
     // engine cross-checks against the Noise handshake.
     let (sender, receiver) = match transport {
         TransportArg::Tcp => loopback_pair(&TcpTransport::default(), &TcpTransport::default(), paths, &staging, &out, &sopts, ropts).await?,
-        TransportArg::Quic => loopback_pair(&quic(&sopts.common.identity)?, &quic(&ropts.common.identity)?, paths, &staging, &out, &sopts, ropts).await?,
+        TransportArg::Quic => loopback_pair(&quic(&sopts.common.identity, qcfg)?, &quic(&ropts.common.identity, qcfg)?, paths, &staging, &out, &sopts, ropts).await?,
     };
     // Free the space before the next repetition.
     std::fs::remove_dir_all(&out)?;
@@ -366,8 +373,19 @@ fn drained(side: &str, r: transport::Result<()>) {
 }
 
 /// QUIC endpoint whose TLS identity is the engine identity (manual §12.1).
-fn quic(identity: &DeviceIdentity) -> Result<QuicTransport, BoxError> {
-    Ok(QuicTransport::new(identity, QuicConfig::default())?)
+fn quic(identity: &DeviceIdentity, cfg: &QuicConfig) -> Result<QuicTransport, BoxError> {
+    Ok(QuicTransport::new(identity, cfg.clone())?)
+}
+
+fn quic_config(packet_threshold: Option<u32>, time_threshold: Option<f32>) -> QuicConfig {
+    let mut c = QuicConfig::default();
+    if let Some(n) = packet_threshold {
+        c.packet_threshold = n;
+    }
+    if let Some(t) = time_threshold {
+        c.time_threshold = t;
+    }
+    c
 }
 
 #[cfg(test)]

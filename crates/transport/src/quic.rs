@@ -89,6 +89,12 @@ pub struct QuicConfig {
     /// Connection-wide unacknowledged send buffer (bytes).
     pub send_window: u64,
     pub congestion: CongestionControl,
+    /// Packets that must be acknowledged after a missing one before it is
+    /// declared lost (RFC 9002 kPacketThreshold, default 3). Higher tolerates
+    /// reordering better at the cost of slower loss detection.
+    pub packet_threshold: u32,
+    /// Time-based loss threshold as a multiple of RTT (RFC 9002 kTimeThreshold, 9/8).
+    pub time_threshold: f32,
     pub keep_alive: Option<Duration>,
     pub idle_timeout: Duration,
     /// Time a peer gets to finish the TLS handshake and open every stream.
@@ -122,6 +128,8 @@ impl Default for QuicConfig {
             receive_window: 64 << 20,
             send_window: 64 << 20,
             congestion: CongestionControl::Cubic,
+            packet_threshold: 3,
+            time_threshold: 9.0 / 8.0,
             keep_alive: Some(Duration::from_secs(5)),
             idle_timeout: Duration::from_secs(30),
             handshake_timeout: Duration::from_secs(10),
@@ -143,10 +151,13 @@ impl QuicConfig {
         // Deliberate clamp: a window above the 2^62 varint limit just means "unbounded".
         let var = |v: u64| VarInt::from_u64(v).unwrap_or(VarInt::MAX);
         let mut t = quinn::TransportConfig::default();
+        if self.packet_threshold < 3 || !(self.time_threshold >= 1.0 && self.time_threshold.is_finite()) {
+            return Err(TransportError::InvalidConfig("packet_threshold must be >= 3 and time_threshold >= 1.0 (RFC 9002)"));
+        }
         if self.stream_receive_window > MAX_SAFE_STREAM_WINDOW {
             return Err(TransportError::InvalidConfig("stream_receive_window above MAX_SAFE_STREAM_WINDOW (quinn gap limit)"));
         }
-        t.stream_receive_window(var(self.stream_receive_window)).receive_window(var(self.receive_window)).send_window(self.send_window).max_concurrent_bidi_streams(VarInt::from_u32(MAX_DATA_STREAMS as u32 + 1)).max_concurrent_uni_streams(VarInt::from_u32(0)).datagram_receive_buffer_size(None).keep_alive_interval(self.keep_alive).max_idle_timeout(Some(IdleTimeout::try_from(self.idle_timeout).map_err(|_| TransportError::InvalidConfig("idle_timeout"))?)).initial_mtu(self.initial_mtu).mtu_discovery_config(self.mtu_discovery.then(MtuDiscoveryConfig::default));
+        t.stream_receive_window(var(self.stream_receive_window)).receive_window(var(self.receive_window)).send_window(self.send_window).max_concurrent_bidi_streams(VarInt::from_u32(MAX_DATA_STREAMS as u32 + 1)).max_concurrent_uni_streams(VarInt::from_u32(0)).datagram_receive_buffer_size(None).keep_alive_interval(self.keep_alive).max_idle_timeout(Some(IdleTimeout::try_from(self.idle_timeout).map_err(|_| TransportError::InvalidConfig("idle_timeout"))?)).initial_mtu(self.initial_mtu).mtu_discovery_config(self.mtu_discovery.then(MtuDiscoveryConfig::default)).packet_threshold(self.packet_threshold).time_threshold(self.time_threshold);
         match self.congestion {
             CongestionControl::Cubic => t.congestion_controller_factory(Arc::new(quinn::congestion::CubicConfig::default())),
             CongestionControl::Bbr => t.congestion_controller_factory(Arc::new(quinn::congestion::BbrConfig::default())),

@@ -69,7 +69,7 @@ pub fn hash_file_parallel_blocking(path: impl AsRef<Path>, threads: usize) -> Re
     let threads = threads.clamp(1, count as usize);
     let next = std::sync::atomic::AtomicU64::new(0);
     let mut pieces = vec![[0u8; 32]; count as usize];
-    let results: Vec<Result<Vec<(u64, [u8; 32])>>> = std::thread::scope(|s| {
+    let results: Vec<Result<Vec<IndexedPiece>>> = std::thread::scope(|s| {
         let workers: Vec<_> = (0..threads)
             .map(|_| {
                 s.spawn(|| {
@@ -96,6 +96,8 @@ pub fn hash_file_parallel_blocking(path: impl AsRef<Path>, threads: usize) -> Re
     let root = file_hash_from_pieces(size, &pieces).ok_or(StorageError::PieceCountMismatch { expected: count, actual: pieces.len() as u64 })?;
     Ok((root, pieces))
 }
+
+type IndexedPiece = (u64, [u8; 32]);
 
 // Piece size is a parameter so tests can cover many tree shapes cheaply. It
 // must be a power of two and a multiple of blake3::CHUNK_LEN, so every piece

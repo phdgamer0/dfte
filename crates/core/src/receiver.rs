@@ -401,6 +401,16 @@ async fn run(mut sc: SecureConnection, staging: PathBuf, dest: Dest<'_>, opts: &
     let mut set = JoinSet::new();
     let mut reader = None;
     let res = drive(&mut control_tx, control_rx, data, &manifest, &mut inc, opts, &staging, &mut set, &mut reader).await;
+    let local_cancel = matches!(res, Err(EngineError::Cancelled)) && opts.common.cancel.as_ref().is_some_and(super::options::CancelHandle::is_cancelled);
+    if local_cancel {
+        // Tell the peer *before* the stream tasks go away: on QUIC, dropping a
+        // receive stream sends STOP_SENDING, and a sender that sees its data
+        // stream stopped first reports a lost peer instead of a cancel.
+        // Best effort on a failing path: the local error is what we report.
+        if let Err(ce) = control_tx.send(&Message::Cancel).await {
+            tracing::debug!(error = %ce, "could not tell peer about cancel");
+        }
+    }
     // Stop the stream tasks (they may be parked on a read) and let them drop
     // their handles on the staging files.
     let reaped = abort_all(&mut set).await;
@@ -419,12 +429,6 @@ async fn run(mut sc: SecureConnection, staging: PathBuf, dest: Dest<'_>, opts: &
             tracing::debug!(error = %se, "transfer state machine already terminal");
         }
         tracing::warn!(error = %e, "receive interrupted, keeping resume state");
-        if matches!(e, EngineError::Cancelled) && opts.common.cancel.as_ref().is_some_and(super::options::CancelHandle::is_cancelled) {
-            // Best effort on a failing path: the local error is what we report.
-            if let Err(ce) = control_tx.send(&Message::Cancel).await {
-                tracing::debug!(error = %ce, "could not tell peer about cancel");
-            }
-        }
         if !matches!(e, EngineError::PeerLost | EngineError::Cancelled) {
             control_tx.close(e.close_reason()).await;
         } else if let Err(se) = control_tx.shutdown().await {

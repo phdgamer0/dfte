@@ -24,9 +24,12 @@ mod source;
 mod tasks;
 
 pub use crypto::DeviceIdentity;
-pub use error::{EngineError, ErrorCode, Result};
-pub use manager::{IncomingOffer, ManagerConfig, OfferedFile, SendTarget, Transfer, TransferId, TransferManager, TransferObserver, TransferState, VerifyRequest};
+pub use error::{EngineError, Result};
 pub use options::{CancelHandle, CommonOptions, ExpectFingerprint, PeerAuth, PeerVerifier, Progress, ProgressFn, ReceiveOptions, SendOptions, TrustAny};
 pub use receiver::receive;
 pub use report::{Direction, PhaseTimings, TransferReport};
 pub use sender::send_files;
+
+// The app-facing TransferManager surface (manual §22).
+pub use error::ErrorCode;
+pub use manager::{IncomingOffer, ManagerConfig, OfferedFile, SendTarget, Transfer, TransferId, TransferManager, TransferObserver, TransferState, VerifyRequest};

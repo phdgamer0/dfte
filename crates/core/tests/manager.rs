@@ -362,6 +362,35 @@ async fn pause_then_resume_continues_from_receiver_sidecar() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn receiver_cancel_mid_transfer() {
+    let mut rx_node = trusting(TransportKind::Quic, "receiver", None);
+    let out = rx_node.root.join("out");
+    let mut tx_node = slow_sender(TransportKind::Quic);
+    let addr = rx_node.listen().await;
+    let src = tx_node.root.join("big.bin");
+    write_data(&src, 96 * MIB, 3);
+
+    let id = tx_node.m.send_files(to(addr, None), vec![src]).await.unwrap();
+    let offer = rx_node.incoming().await;
+    rx_node.m.accept_incoming(&offer.transfer_id, out.clone()).await.unwrap();
+    let mid = wait_bytes(&rx_node.m, &offer.transfer_id, 8 * MIB).await;
+    assert_eq!(mid.state, TransferState::Transferring);
+    rx_node.m.cancel(&offer.transfer_id).await.unwrap();
+    assert_eq!(rx_node.final_state(&offer.transfer_id).await, TransferState::Cancelled);
+    // On QUIC the receiver's stopped data streams can overtake its Cancel; the
+    // sender must still report a cancel, not a lost peer.
+    let st = tx_node.final_state(&id).await;
+    assert_eq!(st, TransferState::Cancelled, "sender errors: {:?}", tx_node.errors());
+    assert!(rx_node.errors().is_empty(), "a local cancel is not an error");
+    // Cancelling again is idempotent; unknown ids are reported as such.
+    rx_node.m.cancel(&offer.transfer_id).await.unwrap();
+    assert!(matches!(rx_node.m.cancel("nope").await, Err(EngineError::UnknownTransfer(_))));
+
+    tx_node.m.shutdown().await.unwrap();
+    rx_node.m.shutdown().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn rejected_verification_fails_with_authentication_failed() {
     let mut rx_node = node(TransportKind::Tcp, "receiver", Policy { verify: Some(false), accept_into: None }, |_| {}, None);
     let mut tx_node = trusting(TransportKind::Tcp, "sender", None);

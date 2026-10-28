@@ -45,6 +45,34 @@ use crate::tasks::{CLOSE_LINGER, ControlReader, EventSink, abort_all, forward, j
 /// Pool buffers hold a whole sealed chunk body: sub-header + data + tag.
 pub(crate) const BODY_CAPACITY: usize = CHUNK_HEADER_LEN + CHUNK_SIZE as usize + TAG_LEN;
 
+/// How long a data-stream failure waits for the peer's reason on the control stream.
+const STREAM_FAILURE_GRACE: Duration = Duration::from_millis(500);
+
+/// A receiver that cancels stops its data streams too, and on QUIC the
+/// `STOP_SENDING` can overtake the `Cancel` sent on the control stream just
+/// before it. Briefly look for that reason so a cancel isn't reported as a lost
+/// peer; `e` stands if none arrives.
+async fn explain_stream_failure(ev_rx: &mut mpsc::UnboundedReceiver<Event>, e: EngineError) -> EngineError {
+    let reason = async {
+        while let Some(ev) = ev_rx.recv().await {
+            match ev {
+                Event::Control(Control::Cancel) => return Some(EngineError::Cancelled),
+                Event::Control(Control::Close(r)) => return Some(EngineError::from_peer_close(r)),
+                Event::ControlEof | Event::Failed(_) => return None,
+                _ => {}
+            }
+        }
+        None
+    };
+    match tokio::time::timeout(STREAM_FAILURE_GRACE, reason).await {
+        Ok(Some(reason)) => {
+            tracing::debug!(error = %e, reason = %reason, "data stream failed because the peer stopped the transfer");
+            reason
+        }
+        Ok(None) | Err(_) => e,
+    }
+}
+
 /// Hash the files at `paths`, connect to `addr` over `transport`, authenticate the
 /// peer and send everything (manual §9.2). Returns once the receiver confirmed it
 /// verified and stored every file.
@@ -509,7 +537,8 @@ async fn drive(control_tx: &mut crate::secure::ControlTx, control_rx: ControlRx,
             Event::Control(other) => return Err(EngineError::violation(format!("unexpected {other:?} during transfer"))),
             Event::ControlEof => return Err(EngineError::PeerLost),
             // Chunks are still in flight: a broken data stream is fatal here.
-            Event::Failed(e) | Event::StreamFailed(e) => return Err(e),
+            Event::Failed(e) => return Err(e),
+            Event::StreamFailed(e) => return Err(explain_stream_failure(&mut ev_rx, e).await),
         }
     }
     xfer.on_event(TransferEvent::AllChunksConfirmed)?;

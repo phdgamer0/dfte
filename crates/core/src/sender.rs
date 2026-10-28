@@ -39,7 +39,7 @@ use crate::options::{CancelHandle, Progress, SendOptions};
 use crate::report::{Direction, PhaseTimings, TransferReport, rate, secs};
 use crate::secure::{Control, ControlRx, DataStream, SecureConnection, establish_initiator};
 use crate::source::{Readers, Source, build_source_blocking};
-use crate::tasks::{abort_all, forward, join_all};
+use crate::tasks::{CLOSE_LINGER, ControlReader, EventSink, abort_all, forward, join_all, spawn_control_reader};
 
 /// Pool buffers hold a whole sealed chunk body: sub-header + data + tag.
 pub(crate) const BODY_CAPACITY: usize = CHUNK_HEADER_LEN + CHUNK_SIZE as usize + TAG_LEN;
@@ -220,18 +220,11 @@ async fn writer(mut w: FrameWriter, mut rx: mpsc::Receiver<Prepared>, events: mp
     Ok(())
 }
 
-async fn control_reader(mut rx: ControlRx, events: mpsc::UnboundedSender<Event>) {
-    loop {
-        let ev = match rx.recv().await {
-            Ok(Some(c)) => Event::Control(c),
-            Ok(None) => Event::ControlEof,
-            Err(e) => Event::Failed(e),
-        };
-        let stop = !matches!(ev, Event::Control(_));
-        forward(&events, ev);
-        if stop || events.is_closed() {
-            return;
-        }
+fn control_event(r: Result<Option<Control>>) -> Event {
+    match r {
+        Ok(Some(c)) => Event::Control(c),
+        Ok(None) => Event::ControlEof,
+        Err(e) => Event::Failed(e),
     }
 }
 
@@ -344,9 +337,16 @@ pub(crate) fn kind_name(kind: TransportKind) -> String {
 async fn transfer(sc: SecureConnection, files: Vec<crate::source::SourceFile>, plan: &Plan, opts: &SendOptions, xfer: &mut Transfer) -> Result<(u64, f64)> {
     let SecureConnection { mut control_tx, control_rx, data, .. } = sc;
     let mut set = JoinSet::new();
-    let res = drive(&mut control_tx, control_rx, data, files, plan, opts, xfer, &mut set).await;
+    let mut reader = None;
+    let res = drive(&mut control_tx, control_rx, data, files, plan, opts, xfer, &mut set, &mut reader).await;
     match res {
-        Ok(v) => Ok(v),
+        Ok(v) => {
+            // Graceful close: wait for the receiver's EOF so neither side resets.
+            if let Some(r) = reader {
+                r.finish(CLOSE_LINGER).await?;
+            }
+            Ok(v)
+        }
         Err(e) => {
             if let Err(se) = xfer.on_event(if matches!(e, EngineError::Cancelled) { TransferEvent::Cancel } else { TransferEvent::ConnectionLost }) {
                 tracing::debug!(error = %se, "transfer state machine already terminal");
@@ -362,6 +362,15 @@ async fn transfer(sc: SecureConnection, files: Vec<crate::source::SourceFile>, p
             }
             if !matches!(e, EngineError::PeerLost | EngineError::ConnectionRejected | EngineError::PeerDiskFull) {
                 control_tx.close(e.close_reason()).await;
+            } else if let Err(se) = control_tx.shutdown().await {
+                tracing::debug!(error = %se, "control half-close on a failing path failed");
+            }
+            // Keep reading until the peer closes, so our Cancel/Close isn't
+            // destroyed by an RST (see tasks::ControlReader).
+            if let Some(r) = reader
+                && let Err(re) = r.finish(CLOSE_LINGER).await
+            {
+                tracing::error!(error = %re, "control reader failed while closing after: {e}");
             }
             Err(e)
         }
@@ -369,7 +378,7 @@ async fn transfer(sc: SecureConnection, files: Vec<crate::source::SourceFile>, p
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn drive(control_tx: &mut crate::secure::ControlTx, control_rx: ControlRx, data: Vec<DataStream>, files: Vec<crate::source::SourceFile>, plan: &Plan, opts: &SendOptions, xfer: &mut Transfer, set: &mut JoinSet<()>) -> Result<(u64, f64)> {
+async fn drive(control_tx: &mut crate::secure::ControlTx, control_rx: ControlRx, data: Vec<DataStream>, files: Vec<crate::source::SourceFile>, plan: &Plan, opts: &SendOptions, xfer: &mut Transfer, set: &mut JoinSet<()>, reader: &mut Option<ControlReader>) -> Result<(u64, f64)> {
     let reads: Vec<u64> = plan.chunk_counts.iter().zip(&plan.starts).map(|(&c, &s)| u64::from(c.saturating_sub(s))).collect();
     let sizes: Vec<u64> = plan.manifest.files.iter().map(|f| f.size).collect();
     let readers = Arc::new(Readers::new(files, &reads));
@@ -385,7 +394,7 @@ async fn drive(control_tx: &mut crate::secure::ControlTx, control_rx: ControlRx,
         spawn_reporting(set, &ev_tx, producer(stream_id, sealer, Arc::clone(&queue), Arc::clone(&readers), pool.clone(), ptx));
         spawn_reporting(set, &ev_tx, writer(w, prx, ev_tx.clone()));
     }
-    let control_task = set.spawn(control_reader(control_rx, ev_tx.clone()).in_current_span());
+    *reader = Some(spawn_control_reader(control_rx, EventSink::Unbounded(ev_tx.clone()), control_event));
     drop(ev_tx);
 
     let mut tracker = ChunkTracker::new(opts.ack_timeout);
@@ -506,10 +515,9 @@ async fn drive(control_tx: &mut crate::secure::ControlTx, control_rx: ControlRx,
     if let Err(e) = control_tx.shutdown().await {
         tracing::debug!(error = %e, "control half-close after completion failed");
     }
-    // The control reader may still be parked on the socket; everything else ends
-    // by itself now that the queue is closed. Reap them all (panics propagate)
-    // and surface any failure a stream task reported on the way out.
-    control_task.abort();
+    // Everything else ends by itself now that the queue is closed (the control
+    // reader is finished by the caller). Reap them all (panics propagate) and
+    // surface any failure a stream task reported on the way out.
     join_all(set).await?;
     while let Ok(ev) = ev_rx.try_recv() {
         if let Event::Failed(e) = ev {

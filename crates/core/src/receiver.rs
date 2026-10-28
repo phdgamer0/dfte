@@ -36,7 +36,7 @@ use crate::options::{Progress, ReceiveOptions};
 use crate::report::{Direction, PhaseTimings, TransferReport, rate, secs};
 use crate::secure::{Control, ControlTx, DataStream, SecureConnection, establish_responder};
 use crate::sender::{BODY_CAPACITY, cancelled, kind_name};
-use crate::tasks::{abort_all, forward_bounded};
+use crate::tasks::{CLOSE_LINGER, ControlReader, EventSink, abort_all, forward_bounded, spawn_control_reader};
 
 /// Accept one connection on `listener`, authenticate the peer, and receive its
 /// transfer: partial data and the resume sidecar live in `staging_dir`
@@ -199,6 +199,14 @@ enum Event {
     Control(Control),
     ControlEof,
     Failed(EngineError),
+}
+
+fn control_event(r: Result<Option<Control>>) -> Event {
+    match r {
+        Ok(Some(c)) => Event::Control(c),
+        Ok(None) => Event::ControlEof,
+        Err(e) => Event::Failed(e),
+    }
 }
 
 /// Per-file facts a data-stream task needs to validate a chunk.
@@ -365,7 +373,8 @@ async fn run(mut sc: SecureConnection, staging: PathBuf, dest: PathBuf, opts: &R
 
     let t = Instant::now();
     let mut set = JoinSet::new();
-    let res = drive(&mut control_tx, control_rx, data, &manifest, &mut inc, opts, &staging, &mut set).await;
+    let mut reader = None;
+    let res = drive(&mut control_tx, control_rx, data, &manifest, &mut inc, opts, &staging, &mut set, &mut reader).await;
     // Stop the stream tasks (they may be parked on a read) and let them drop
     // their handles on the staging files.
     let reaped = abort_all(&mut set).await;
@@ -392,12 +401,15 @@ async fn run(mut sc: SecureConnection, staging: PathBuf, dest: PathBuf, opts: &R
         }
         if !matches!(e, EngineError::PeerLost | EngineError::Cancelled) {
             control_tx.close(e.close_reason()).await;
+        } else if let Err(se) = control_tx.shutdown().await {
+            tracing::debug!(error = %se, "control half-close on a failing path failed");
         }
         if let Err(pe) = persist_on_interrupt(&inc, &staging).await {
             // The interruption is the error to report; failing to persist only
             // means the next attempt starts further back.
             tracing::error!(error = %pe, "could not persist resume state");
         }
+        linger_close(reader, &e).await;
         return Err(e);
     }
     let transfer_secs = secs(t.elapsed());
@@ -413,6 +425,10 @@ async fn run(mut sc: SecureConnection, staging: PathBuf, dest: PathBuf, opts: &R
             if let Err(e) = control_tx.shutdown().await {
                 tracing::debug!(error = %e, "control half-close after completion failed");
             }
+            // Graceful close: wait for the sender's EOF so neither side resets.
+            if let Some(r) = reader {
+                r.finish(CLOSE_LINGER).await?;
+            }
             timings.finalize_secs = secs(t.elapsed());
             timings.transfer_secs = transfer_secs;
             let bytes_total = manifest.total_bytes();
@@ -427,8 +443,19 @@ async fn run(mut sc: SecureConnection, staging: PathBuf, dest: PathBuf, opts: &R
             }
             tracing::error!(error = %e, "finalize failed");
             control_tx.close(e.close_reason()).await;
+            linger_close(reader, &e).await;
             Err(e)
         }
+    }
+}
+
+/// On a failing path: keep reading until the peer closes so our Close/Cancel is
+/// delivered (see `tasks::ControlReader`); `e` is the error being reported.
+async fn linger_close(reader: Option<ControlReader>, e: &EngineError) {
+    if let Some(r) = reader
+        && let Err(re) = r.finish(CLOSE_LINGER).await
+    {
+        tracing::error!(error = %re, "control reader failed while closing after: {e}");
     }
 }
 
@@ -449,7 +476,7 @@ async fn persist_on_interrupt(inc: &Incoming, staging: &Path) -> Result<()> {
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn drive(control_tx: &mut ControlTx, control_rx: crate::secure::ControlRx, data: Vec<DataStream>, manifest: &Manifest, inc: &mut Incoming, opts: &ReceiveOptions, staging: &Path, set: &mut JoinSet<()>) -> Result<()> {
+async fn drive(control_tx: &mut ControlTx, control_rx: crate::secure::ControlRx, data: Vec<DataStream>, manifest: &Manifest, inc: &mut Incoming, opts: &ReceiveOptions, staging: &Path, set: &mut JoinSet<()>, reader: &mut Option<ControlReader>) -> Result<()> {
     let (ev_tx, mut ev_rx) = mpsc::channel::<Event>(1024);
     let infos: Vec<FileInfo> = manifest.files.iter().zip(&inc.staged).map(|(f, s)| FileInfo { size: f.size, chunks: u64::from(f.chunk_count), staged: s.clone() }).collect();
     let infos = Arc::new(infos);
@@ -467,27 +494,7 @@ async fn drive(control_tx: &mut ControlTx, control_rx: crate::secure::ControlRx,
         );
     }
     drop(infos);
-    {
-        let events = ev_tx.clone();
-        let mut rx = control_rx;
-        set.spawn(
-            async move {
-                loop {
-                    let ev = match rx.recv().await {
-                        Ok(Some(c)) => Event::Control(c),
-                        Ok(None) => Event::ControlEof,
-                        Err(e) => Event::Failed(e),
-                    };
-                    let stop = !matches!(ev, Event::Control(_));
-                    forward_bounded(&events, ev).await;
-                    if stop || events.is_closed() {
-                        return;
-                    }
-                }
-            }
-            .in_current_span(),
-        );
-    }
+    *reader = Some(spawn_control_reader(control_rx, EventSink::Bounded(ev_tx.clone()), control_event));
 
     let mut missing: u64 = inc.pieces.iter().map(|p| p.iter().filter(|h| h.is_none()).count() as u64).sum();
     let bytes_total = manifest.total_bytes();

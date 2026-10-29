@@ -525,8 +525,9 @@ async fn hash_cache_skips_rehash_on_resend() {
     let (s, r) = run_pair(&d, vec![f.clone()], again, recv_opts(Arc::new(TrustAny)), None).await;
     let (s, _r) = (s.unwrap(), r.unwrap());
     assert_eq!(hash_file_blocking(d.out.join("f.bin")).unwrap(), hash_file_blocking(&f).unwrap());
-    // Without the cache this pass reads the whole file; with it there's nothing to read.
-    assert!(s.timings.hash_secs < 0.05, "hash phase took {}s with a warm cache", s.timings.hash_secs);
+    // Asserted directly rather than by timing: on Windows CI a just-written cache
+    // entry can be held by the virus scanner for ~0.2 s, longer than hashing 12 MiB.
+    assert_eq!(s.hash_cache_hits, 1, "the resend must take its hashes from the cache");
 }
 
 /// A forged cache entry (wrong hashes for an unchanged file) must make the

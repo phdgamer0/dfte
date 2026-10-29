@@ -325,6 +325,23 @@ async fn beacon_targets_need_a_listener_and_a_local_address() {
     n.m.shutdown().await.unwrap();
 }
 
+/// Engine logs (info and up) into the test's captured output, which libtest prints
+/// only for a failing test: a CI-only failure then explains itself.
+fn init_logs() {
+    // Another test in this binary may have installed it already.
+    let _ = tracing_subscriber::fmt().with_test_writer().with_ansi(false).with_env_filter("info").try_init();
+}
+
+/// Resume sidecars in a staging directory (panics with the reason if unreadable).
+fn staging_report(staging: &Path) -> Vec<storage::ResumeState> {
+    storage::scan_orphans_blocking(staging).unwrap_or_else(|e| panic!("cannot scan {}: {e}; contents: {:?}", staging.display(), list_dir(staging)))
+}
+
+/// Names and sizes in a directory, for failure messages.
+fn list_dir(dir: &Path) -> Vec<(String, u64)> {
+    std::fs::read_dir(dir).map(|rd| rd.filter_map(Result::ok).map(|e| (e.file_name().to_string_lossy().into_owned(), e.metadata().map_or(0, |m| m.len()))).collect()).unwrap_or_default()
+}
+
 /// Polls snapshots until the job has moved at least `bytes`.
 async fn wait_bytes(m: &TransferManager, id: &str, bytes: u64) -> Transfer {
     let deadline = Instant::now() + WAIT;
@@ -354,6 +371,7 @@ fn slow_sender(kind: TransportKind) -> Node {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn pause_then_resume_continues_from_receiver_sidecar() {
+    init_logs();
     let mut rx_node = trusting(TransportKind::Tcp, "receiver", None);
     let out = rx_node.root.join("out");
     let mut rx_policy_out = Some(out.clone());
@@ -374,6 +392,11 @@ async fn pause_then_resume_continues_from_receiver_sidecar() {
     assert_eq!(rx_node.final_state(&first.transfer_id).await, TransferState::Cancelled);
     assert!(!out.join("big.bin").exists());
     assert!(matches!(tx_node.m.pause(&id).await, Err(EngineError::InvalidInput(_))));
+    // What the receiver persisted: the resume below must start exactly here (§19).
+    let staging = rx_node.root.join("app").join("staging");
+    let held = staging_report(&staging);
+    let held_bytes: u64 = held.iter().map(|s| s.files.iter().map(storage::ResumeFile::contiguous_offset).sum::<u64>()).sum();
+    assert!(held_bytes >= 12 * MIB, "receiver persisted only {held_bytes} bytes after 12 MiB were acked: {held:?}\nstaging: {:?}", list_dir(&staging));
 
     tx_node.m.resume(&id).await.unwrap();
     let second = rx_node.incoming().await;
@@ -382,7 +405,7 @@ async fn pause_then_resume_continues_from_receiver_sidecar() {
     assert_eq!(tx_node.final_state(&id).await, TransferState::Completed);
     assert_eq!(rx_node.final_state(&second.transfer_id).await, TransferState::Completed);
     let s = tx_node.m.transfer(&id).await.unwrap();
-    assert!(s.resumed_bytes > 0, "resume restarted from zero: {s:?}");
+    assert_eq!(s.resumed_bytes, held_bytes, "resume did not start where the receiver left off: {s:?}\nstaging now: {:?}", list_dir(&staging));
     assert_eq!(rx_node.m.transfer(&second.transfer_id).await.unwrap().resumed_bytes, s.resumed_bytes);
     assert_same(&src, &out.join("big.bin"));
     // Same job id across attempts: Paused → Pending → … → Completed.

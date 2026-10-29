@@ -27,6 +27,16 @@ pub fn data_dir() -> Result<PathBuf, CliError> {
     Ok(base.join("dfte"))
 }
 
+/// `$XDG_CACHE_HOME/dfte`, default `~/.cache/dfte`: things safe to delete (the
+/// sender's hash cache).
+pub fn cache_dir() -> Result<PathBuf, CliError> {
+    let base = match env_path("XDG_CACHE_HOME") {
+        Some(p) => p,
+        None => home()?.join(".cache"),
+    };
+    Ok(base.join("dfte"))
+}
+
 /// App-private staging directory (manual §14): partial files and resume sidecars.
 pub fn staging_dir(data: &Path) -> PathBuf {
     data.join("staging")

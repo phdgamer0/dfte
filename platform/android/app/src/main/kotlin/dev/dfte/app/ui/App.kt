@@ -30,6 +30,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import dev.dfte.app.DfteApp
+import dev.dfte.app.Engine
 import dev.dfte.app.Screen
 import dev.dfte.app.Target
 import kotlinx.coroutines.delay
@@ -41,8 +42,7 @@ import kotlinx.coroutines.launch
  * whatever is on screen, because they can arrive at any time.
  */
 @Composable
-fun AppRoot(app: DfteApp, pickFiles: () -> Unit, askPermissions: () -> Unit, allowWifiDirect: () -> Unit) {
-    val engine = app.engine
+fun AppRoot(app: DfteApp, engine: Engine, pickFiles: () -> Unit, askPermissions: () -> Unit, allowWifiDirect: () -> Unit) {
     val nav = app.nav
     val state by engine.state.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()

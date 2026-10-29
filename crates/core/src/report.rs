@@ -48,6 +48,8 @@ pub struct TransferReport {
     pub bytes_transferred: u64,
     /// Bytes skipped because the receiver already held them (manual §19).
     pub resumed_bytes: u64,
+    /// Sender: files whose hashes came from the hash cache instead of a read (§19).
+    pub hash_cache_hits: u64,
     pub chunks: u64,
     /// Chunks resent after an integrity NACK or ack timeout (manual §9.3).
     pub retransmits: u64,

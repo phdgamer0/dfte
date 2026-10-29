@@ -329,7 +329,7 @@ fn plan(manifest: Manifest, starts: Vec<u32>) -> Plan {
 async fn run(mut sc: SecureConnection, source: Source, opts: &SendOptions, mut timings: PhaseTimings, started: Instant, phase: Option<PhaseFn<'_>>) -> Result<TransferReport> {
     let mut xfer = Transfer::new(Role::Initiator);
     let t = Instant::now();
-    let Source { manifest, files } = source;
+    let Source { manifest, files, cache_hits: hash_cache_hits } = source;
     let result = async {
         sc.control_tx.send(&Message::ManifestOffer(manifest.clone())).await?;
         xfer.on_event(TransferEvent::OfferSent)?;
@@ -374,7 +374,7 @@ async fn run(mut sc: SecureConnection, source: Source, opts: &SendOptions, mut t
     timings.finalize_secs = finalize_secs;
     timings.transfer_secs = secs(t.elapsed()) - finalize_secs;
     let bytes_transferred = bytes_total - plan.resumed_bytes;
-    let report = TransferReport { direction: Direction::Send, transfer_id, peer_fingerprint: peer.fingerprint, peer_name: peer.device_name, transport: kind_name(kind), cipher, streams, files: file_count, bytes_total, bytes_transferred, resumed_bytes: plan.resumed_bytes, chunks: plan.total_chunks, retransmits, total_secs: secs(started.elapsed()), throughput_bytes_per_sec: rate(bytes_transferred, timings.transfer_secs), end_to_end_bytes_per_sec: rate(bytes_transferred, timings.transfer_secs + timings.finalize_secs), timings, saved: Vec::new() };
+    let report = TransferReport { direction: Direction::Send, transfer_id, peer_fingerprint: peer.fingerprint, peer_name: peer.device_name, transport: kind_name(kind), cipher, streams, files: file_count, bytes_total, bytes_transferred, resumed_bytes: plan.resumed_bytes, hash_cache_hits, chunks: plan.total_chunks, retransmits, total_secs: secs(started.elapsed()), throughput_bytes_per_sec: rate(bytes_transferred, timings.transfer_secs), end_to_end_bytes_per_sec: rate(bytes_transferred, timings.transfer_secs + timings.finalize_secs), timings, saved: Vec::new() };
     tracing::info!(bytes = report.bytes_transferred, secs = report.timings.transfer_secs, retransmits, "send complete");
     Ok(report)
 }

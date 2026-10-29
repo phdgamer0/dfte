@@ -834,7 +834,7 @@ async fn send_with<T: Transport>(t: &T, ctx: &Ctx, a: &SendArgs, addr: SocketAdd
     let mut opts = SendOptions::new(Arc::clone(&ctx.id), Arc::new(verifier));
     opts.common.device_name = identity::device_name();
     opts.streams = a.streams;
-    // TODO(hash-cache, PR #15): set opts.hash_cache_dir to $XDG_CACHE_HOME/dfte/hashes once merged.
+    opts.hash_cache_dir = Some(paths::cache_dir()?.join("hashes"));
     let reporter = Arc::new(Reporter::new("Sending", std::io::stderr().is_terminal()));
     opts.common.progress = Some(progress_fn(&reporter));
     let cancel = CancelHandle::new();

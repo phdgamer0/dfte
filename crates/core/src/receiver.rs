@@ -476,6 +476,13 @@ async fn run(mut sc: SecureConnection, staging: PathBuf, dest: Dest<'_>, opts: &
         } else if let Err(se) = control_tx.shutdown().await {
             tracing::debug!(error = %se, "control half-close on a failing path failed");
         }
+        // Blocking pwrite jobs already running can't be aborted with their tasks; let
+        // them finish first, so the saved state covers them and they can't change the
+        // staged file under the next attempt (on macOS CI they outlived the attempt,
+        // and the resume re-read saw the file change and started over from zero).
+        if let Err(we) = wait_for_writes(&inc).await {
+            tracing::error!(error = %we, "writes of the interrupted attempt still running");
+        }
         if let Err(pe) = persist_on_interrupt(&inc, &staging).await {
             // The interruption is the error to report; failing to persist only
             // means the next attempt starts further back.
@@ -533,6 +540,22 @@ async fn linger_close(reader: Option<ControlReader>, e: &EngineError) {
 
 /// Make staged data durable and persist the bitmap so a later transfer of the
 /// same files resumes (manual §19).
+/// Waits until no write job of the ended attempt still holds a staged file (each
+/// holds a clone of its `Arc` until its pwrite returns).
+async fn wait_for_writes(inc: &Incoming) -> Result<()> {
+    for _ in 0..WRITE_DRAIN_POLLS {
+        if inc.staged.iter().flatten().all(|sf| Arc::strong_count(sf) == 1) {
+            return Ok(());
+        }
+        tokio::time::sleep(WRITE_DRAIN_POLL).await;
+    }
+    Err(EngineError::Internal("write jobs did not finish within 10 s".into()))
+}
+
+/// How long [`wait_for_writes`] and [`take_owned`] wait for straggling writes: 10 s.
+const WRITE_DRAIN_POLL: Duration = Duration::from_millis(5);
+const WRITE_DRAIN_POLLS: u32 = 2000;
+
 async fn persist_on_interrupt(inc: &Incoming, staging: &Path) -> Result<()> {
     let staged: Vec<Arc<StagedFile>> = inc.staged.iter().flatten().cloned().collect();
     let state = inc.state.clone();
@@ -687,12 +710,12 @@ async fn join_flush(task: &mut Option<tokio::task::JoinHandle<Result<()>>>) -> s
 /// (e.g. a duplicate resend still being written) to release their handle.
 async fn take_owned(sf: Arc<StagedFile>) -> Result<StagedFile> {
     let mut sf = sf;
-    for _ in 0..2000 {
+    for _ in 0..WRITE_DRAIN_POLLS {
         match Arc::try_unwrap(sf) {
             Ok(owned) => return Ok(owned),
             Err(shared) => sf = shared,
         }
-        tokio::time::sleep(Duration::from_millis(5)).await;
+        tokio::time::sleep(WRITE_DRAIN_POLL).await;
     }
     Err(EngineError::Internal("staging file still in use".into()))
 }

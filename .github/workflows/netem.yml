@@ -53,12 +53,12 @@ jobs:
           sudo modprobe veth
           ip -V
           tc -V
-      - name: Build engine-bench + harness (release)
-        run: cargo build --release --locked -p bench -p netem-harness
+      - name: Build engine-bench + harness (ci-release)
+        run: cargo build --profile ci-release --locked -p bench -p netem-harness
       - name: Run §31 matrix
         run: |
-          sudo ./target/release/netem-harness --require-root \
-            --engine-bench target/release/engine-bench \
+          sudo ./target/ci-release/netem-harness --require-root \
+            --engine-bench target/ci-release/engine-bench \
             --work-dir "$RUNNER_TEMP/netem-work" \
             --out-dir netem-results \
             --summary "$GITHUB_STEP_SUMMARY"

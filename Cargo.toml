@@ -76,6 +76,13 @@ qrcode = { version = "0.14", default-features = false }
 lto = "thin"
 codegen-units = 1
 
+# CI jobs that need optimized code but not shipping-grade codegen (the netem
+# harness checks protocol behaviour under loss): minutes faster to build.
+[profile.ci-release]
+inherits = "release"
+lto = false
+codegen-units = 16
+
 # Build-size diet: full DWARF for every dependency is most of a debug target/.
 # Our crates keep file:line for backtraces; dependencies carry no debug info.
 [profile.dev]

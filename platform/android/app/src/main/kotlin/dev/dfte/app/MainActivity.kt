@@ -15,7 +15,14 @@ import androidx.core.content.ContextCompat
 import androidx.core.content.IntentCompat
 import androidx.lifecycle.lifecycleScope
 import dev.dfte.app.ui.AppRoot
+import dev.dfte.app.ui.Dfte
 import dev.dfte.app.ui.DfteTheme
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.ui.Modifier
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -41,7 +48,12 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         setContent {
             DfteTheme {
-                AppRoot(app, pickFiles = { picker.launch(arrayOf("*/*")) }, askPermissions = ::askPermissions, allowWifiDirect = { wifiDirectPermission.launch(app.engine.wifiDirect.permission) })
+                val engine by app.engineReady.collectAsState()
+                when (val e = engine) {
+                    // Same colour as the window background, so the switch is invisible.
+                    null -> Box(Modifier.fillMaxSize().background(Dfte.colors.bg))
+                    else -> AppRoot(app, e, pickFiles = { picker.launch(arrayOf("*/*")) }, askPermissions = ::askPermissions, allowWifiDirect = { wifiDirectPermission.launch(e.wifiDirect.permission) })
+                }
             }
         }
         if (savedInstanceState == null) handleShare(intent)
@@ -54,13 +66,15 @@ class MainActivity : ComponentActivity() {
 
     override fun onStart() {
         super.onStart()
-        app.engine.foreground()
-        // Back from the permission or Location settings with a Send/Receive screen open.
-        if (app.nav.wantsPeers) app.engine.hostNearby()
+        app.withEngine { e ->
+            e.foreground()
+            // Back from the permission or Location settings with a Send/Receive screen open.
+            if (app.nav.wantsPeers) e.hostNearby()
+        }
     }
 
     override fun onStop() {
-        app.engine.background()
+        app.withEngine { it.background() }
         super.onStop()
     }
 

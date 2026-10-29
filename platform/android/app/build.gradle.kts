@@ -89,7 +89,9 @@ val uniffiBindings = tasks.register<Exec>("uniffiBindings") {
     dependsOn(cargoBuildAndroid)
     workingDir = repoRoot
     val out = bindingsOut
-    commandLine("cargo", "run", "-q", "--release", "-p", "platform-ffi", "--features", "bindgen", "--bin", "uniffi-bindgen", "--", "generate", "--library", rustLib.path, "--language", "kotlin", "--out-dir", out.path, "--no-format")
+    // A host tool that only reads the library's metadata: a dev build is enough and
+    // skips compiling the whole crate graph again with LTO.
+    commandLine("cargo", "run", "-q", "-p", "platform-ffi", "--features", "bindgen", "--bin", "uniffi-bindgen", "--", "generate", "--library", rustLib.path, "--language", "kotlin", "--out-dir", out.path, "--no-format")
     doFirst { out.deleteRecursively() }
     outputs.dir(out)
     outputs.upToDateWhen { false }

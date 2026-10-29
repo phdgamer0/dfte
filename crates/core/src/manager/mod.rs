@@ -102,6 +102,8 @@ struct Shared {
     /// Job tasks, reaped by the ticker and joined on shutdown.
     tasks: Mutex<JoinSet<()>>,
     ticker: Mutex<Option<JoinHandle<()>>>,
+    /// Wakes a parked ticker (new job task or state change).
+    wake: Arc<tokio::sync::Notify>,
     incoming: Arc<Semaphore>,
     shutting_down: AtomicBool,
 }
@@ -134,7 +136,7 @@ impl TransferManager {
         // Detached on purpose: it exits on `Notice::Stop` or when every sender is
         // gone, and joining it from an observer callback would deadlock.
         let _detached = notify::spawn_dispatcher(rx, Arc::clone(&observer))?;
-        let shared = Arc::new(Shared { discovery: Mutex::new(cfg.discovery.clone()), lan: Mutex::new(None), incoming: Arc::new(Semaphore::new(cfg.max_incoming)), cfg, rt: runtime.handle().clone(), jobs: RwLock::new(HashMap::new()), next_seq: AtomicU64::new(0), notices: tx, observer, verifies: Mutex::new(HashMap::new()), next_request: AtomicU64::new(1), tcp, quic, listeners: Mutex::new(Vec::new()), scan: Mutex::new(None), peers: Mutex::new(HashMap::new()), tasks: Mutex::new(JoinSet::new()), ticker: Mutex::new(None), shutting_down: AtomicBool::new(false) });
+        let shared = Arc::new(Shared { discovery: Mutex::new(cfg.discovery.clone()), lan: Mutex::new(None), incoming: Arc::new(Semaphore::new(cfg.max_incoming)), cfg, rt: runtime.handle().clone(), jobs: RwLock::new(HashMap::new()), next_seq: AtomicU64::new(0), notices: tx, observer, verifies: Mutex::new(HashMap::new()), next_request: AtomicU64::new(1), tcp, quic, listeners: Mutex::new(Vec::new()), scan: Mutex::new(None), peers: Mutex::new(HashMap::new()), tasks: Mutex::new(JoinSet::new()), ticker: Mutex::new(None), wake: Arc::new(tokio::sync::Notify::new()), shutting_down: AtomicBool::new(false) });
         let ticker = runtime.spawn(ticker(Arc::downgrade(&shared), shared.cfg.progress_interval));
         *lock(&shared.ticker) = Some(ticker);
         Ok(Self { shared, runtime: Some(runtime) })
@@ -332,13 +334,26 @@ impl Drop for TransferManager {
     }
 }
 
+/// Samples rates, retries coalesced notices and reaps job tasks every `period`
+/// while anything is going on; with nothing to do it parks until woken, so an
+/// idle app doesn't wake the CPU 10 times a second.
 async fn ticker(shared: Weak<Shared>, period: Duration) {
     let mut tick = tokio::time::interval(period);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
         tick.tick().await;
         let Some(s) = shared.upgrade() else { return };
-        s.tick(Instant::now()).await;
+        if !s.tick(Instant::now()).await {
+            // Parked, holding no reference to the manager. A wake sent before the
+            // wait starts is kept as a permit, so none is lost.
+            let wake = Arc::clone(&s.wake);
+            drop(s);
+            wake.notified().await;
+            if shared.strong_count() == 0 {
+                return;
+            }
+            tick.reset();
+        }
     }
 }
 
@@ -415,6 +430,7 @@ impl Shared {
 
     fn spawn_job(&self, fut: impl Future<Output = ()> + Send + 'static) {
         lock(&self.tasks).spawn_on(fut, &self.rt);
+        self.wake.notify_one();
     }
 
     // ---- observer plumbing -------------------------------------------------
@@ -467,10 +483,14 @@ impl Shared {
         }
         g.state = state;
         self.publish_state(job, &mut g);
+        self.wake.notify_one();
     }
 
-    async fn tick(&self, now: Instant) {
+    /// One ticker pass. Returns whether anything still needs ticking: a running job
+    /// task, an active job, or a state/progress update not yet delivered.
+    async fn tick(&self, now: Instant) -> bool {
         let jobs: Vec<Arc<Job>> = self.jobs.read().await.values().cloned().collect();
+        let mut busy = false;
         for job in jobs {
             let mut g = job.lock();
             if g.state == TransferState::Transferring {
@@ -480,6 +500,7 @@ impl Shared {
                 self.publish_state(&job, &mut g);
             }
             self.publish_progress(&job, &g);
+            busy |= g.state.is_active() || g.state_dirty || job.bytes_done.load(Ordering::Relaxed) != g.reported_bytes || job.progress_queued.load(Ordering::Acquire);
         }
         let mut tasks = lock(&self.tasks);
         while let Some(r) = tasks.try_join_next() {
@@ -489,6 +510,7 @@ impl Shared {
                 tracing::error!(error = %e, "transfer job task panicked");
             }
         }
+        busy || !tasks.is_empty()
     }
 
     // ---- verification ----------------------------------------------------

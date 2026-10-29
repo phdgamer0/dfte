@@ -16,10 +16,12 @@
 use std::future::Future;
 use std::net::SocketAddr;
 
+pub mod dual;
 pub mod framed;
 pub mod quic;
 pub mod tcp;
 
+pub use dual::{DualListener, listen_pair};
 pub use framed::{FrameReader, FrameWriter, FramedStream};
 pub use quic::{CongestionControl, MAX_SAFE_STREAM_WINDOW, QuicConfig, QuicListener, QuicTransport};
 pub use tcp::{TcpConfig, TcpListener, TcpTransport};

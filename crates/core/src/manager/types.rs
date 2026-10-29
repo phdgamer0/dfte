@@ -153,7 +153,9 @@ pub struct ManagerConfig {
     pub storage_root: PathBuf,
     /// Shown to peers; unauthenticated.
     pub device_name: String,
-    /// Backend for sends and [`listen`](super::TransferManager::listen) (manual §15).
+    /// Backend this device sends with (manual §15); defaults to
+    /// [`TransportKind::platform_default`]. [`listen`](super::TransferManager::listen)
+    /// accepts both, since the sender's own kernel decides.
     pub transport: TransportKind,
     /// Data streams per send (manual §11).
     pub streams: usize,
@@ -189,7 +191,7 @@ pub struct ManagerConfig {
 
 impl ManagerConfig {
     pub fn new(identity: Arc<DeviceIdentity>, storage_root: impl Into<PathBuf>, device_name: impl Into<String>) -> Self {
-        Self { identity, storage_root: storage_root.into(), device_name: device_name.into(), transport: if cfg!(windows) { TransportKind::Tcp } else { TransportKind::Quic }, streams: 2, in_flight_chunks: 16, discovery: None, verifier: None, verify_timeout: Duration::from_secs(120), accept_timeout: Duration::from_secs(120), handshake_timeout: Duration::from_secs(30), idle_timeout: Duration::from_secs(300), progress_interval: Duration::from_millis(100), cancel_grace: Duration::from_secs(5), max_incoming: 8, worker_threads: None, tcp: TcpConfig::default(), quic: QuicConfig::default() }
+        Self { identity, storage_root: storage_root.into(), device_name: device_name.into(), transport: TransportKind::platform_default(), streams: 2, in_flight_chunks: 16, discovery: None, verifier: None, verify_timeout: Duration::from_secs(120), accept_timeout: Duration::from_secs(120), handshake_timeout: Duration::from_secs(30), idle_timeout: Duration::from_secs(300), progress_interval: Duration::from_millis(100), cancel_grace: Duration::from_secs(5), max_incoming: 8, worker_threads: None, tcp: TcpConfig::default(), quic: QuicConfig::default() }
     }
 
     pub fn staging_dir(&self) -> PathBuf {

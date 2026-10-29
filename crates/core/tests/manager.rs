@@ -290,6 +290,29 @@ async fn send_accept_complete_over_quic() {
     full_transfer(TransportKind::Quic).await;
 }
 
+/// One listen() serves senders on either backend: the phone↔laptop case, where
+/// each side's default follows its own kernel (manual §15).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn one_listener_serves_tcp_and_quic_senders() {
+    let mut rx_node = trusting(TransportKind::Quic, "receiver", None);
+    let out = rx_node.root.join("out");
+    let addr = rx_node.listen().await;
+    for (i, kind) in [TransportKind::Tcp, TransportKind::Quic].into_iter().enumerate() {
+        let mut tx_node = trusting(kind, "sender", None);
+        let src = tx_node.root.join(format!("p{i}.bin"));
+        write_data(&src, MIB + 7, i as u64);
+        let id = tx_node.m.send_files(to(addr, None), vec![src.clone()]).await.unwrap();
+        let offer = rx_node.incoming().await;
+        rx_node.m.accept_incoming(&offer.transfer_id, out.clone()).await.unwrap();
+        assert_eq!(tx_node.final_state(&id).await, TransferState::Completed, "{kind:?} sender");
+        assert_eq!(rx_node.final_state(&offer.transfer_id).await, TransferState::Completed, "{kind:?} sender");
+        assert_same(&src, &out.join(format!("p{i}.bin")));
+        tx_node.m.shutdown().await.unwrap();
+    }
+    assert_eq!(rx_node.m.listening().iter().map(|l| l.0).collect::<Vec<_>>(), vec![TransportKind::Tcp, TransportKind::Quic]);
+    rx_node.m.shutdown().await.unwrap();
+}
+
 /// Polls snapshots until the job has moved at least `bytes`.
 async fn wait_bytes(m: &TransferManager, id: &str, bytes: u64) -> Transfer {
     let deadline = Instant::now() + WAIT;

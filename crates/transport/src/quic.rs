@@ -329,6 +329,24 @@ pub struct QuicListener {
     drainer: Drainer,
 }
 
+impl QuicListener {
+    /// What [`Listener::drain`] needs, detached so the listener itself can move into a task.
+    pub(crate) fn drain_handle(&self) -> ListenerDrain {
+        ListenerDrain { drainer: self.drainer.clone(), linger: self.config.linger }
+    }
+}
+
+pub(crate) struct ListenerDrain {
+    drainer: Drainer,
+    linger: Duration,
+}
+
+impl ListenerDrain {
+    pub(crate) async fn drain(&self) -> Result<()> {
+        self.drainer.drain(self.linger).await
+    }
+}
+
 impl Listener for QuicListener {
     fn local_addr(&self) -> Result<SocketAddr> {
         Ok(self.endpoint.local_addr()?)
@@ -359,7 +377,7 @@ impl Listener for QuicListener {
     }
 
     async fn drain(&self) -> Result<()> {
-        self.drainer.drain(self.config.linger).await
+        self.drain_handle().drain().await
     }
 }
 

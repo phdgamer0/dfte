@@ -25,4 +25,4 @@ pub use hash_cache::{CachedHashes, HashCache};
 pub use path::{RelPath, safe_join_blocking, sanitize_component, validate_relative_path};
 pub use pool::{BufferPool, PoolBuffer};
 pub use resume::{ChunkBitmap, ResumeFile, ResumeState, ResumeStore, scan_orphans_blocking};
-pub use writer::{StagedFile, staging_name};
+pub use writer::{PREALLOCATE_MIN, StagedFile, finalize_batch_blocking, staging_name, sync_staged_blocking};

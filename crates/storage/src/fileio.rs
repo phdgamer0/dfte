@@ -115,6 +115,24 @@ pub fn available_space_blocking(path: &Path) -> io::Result<u64> {
     fs4::available_space(path)
 }
 
+/// Makes `files` durable. They must all live on one filesystem (the staging volume).
+///
+/// Per-file fsyncs each force their own journal commit, which on phone eMMC cost
+/// ~3 ms apiece (2000 small files: 7 s). So on Linux/Android one `syncfs` writes
+/// everything back in a single commit first; the per-file `fsync` after it has
+/// nothing left to write and is cheap, and it still reports a writeback error for
+/// that file (`syncfs` only reports them from Linux 5.8).
+pub fn sync_files_blocking(files: &[&File]) -> io::Result<()> {
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    if let Some(first) = files.first() {
+        rustix::fs::syncfs(first)?;
+    }
+    for f in files {
+        f.sync_all()?;
+    }
+    Ok(())
+}
+
 /// fsync a directory so a preceding rename/create in it is durable.
 /// No-op on Windows, where directories cannot be opened this way.
 pub fn sync_dir_blocking(dir: &Path) -> io::Result<()> {

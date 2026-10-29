@@ -20,7 +20,6 @@ use std::time::UNIX_EPOCH;
 use serde::{Deserialize, Serialize};
 
 use crate::error::Result;
-use crate::fileio::sync_dir_blocking;
 use crate::hash::{from_hex, to_hex};
 
 const FORMAT_VERSION: u32 = 1;
@@ -129,7 +128,9 @@ impl HashCache {
     }
 
     /// Records hashes computed from `path` while it had metadata `meta`.
-    /// Written atomically (temp file, fsync, rename).
+    /// Written atomically (temp file, rename) but not fsynced: after a crash an entry
+    /// may be missing or torn, which [`get_blocking`](Self::get_blocking) treats as a
+    /// miss. Two fsyncs per entry would cost more than hashing most files again.
     pub fn put_blocking(&self, path: &Path, meta: &Metadata, root: &[u8; 32], pieces: &[[u8; 32]]) -> Result<()> {
         let canonical = std::fs::canonicalize(path)?;
         let entry = Entry { version: FORMAT_VERSION, path: canonical.clone(), stamp: Stamp::of(meta), root: to_hex(root), pieces: pieces.iter().map(to_hex).collect() };
@@ -146,10 +147,8 @@ impl HashCache {
             }
             let mut f: File = opts.open(&tmp)?;
             f.write_all(&bytes)?;
-            f.sync_all()?;
         }
         std::fs::rename(&tmp, &target)?;
-        sync_dir_blocking(&self.dir)?;
         Ok(())
     }
 }

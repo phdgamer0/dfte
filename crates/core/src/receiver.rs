@@ -181,7 +181,8 @@ fn prepare_blocking(m: &Manifest, staging: &Path, dest: &Path) -> Result<Incomin
                 offset = 0;
                 p.iter_mut().skip(usize::from(f.size == 0)).for_each(|x| *x = None);
                 state.files[i] = ResumeFile::new(&f.relative_path, f.size, f.content_hash)?;
-                StagedFile::create_blocking(staging, &name, dests[i].clone(), f.size)?
+                // Free space was checked once for the whole transfer above.
+                StagedFile::create_prechecked_blocking(staging, &name, dests[i].clone(), f.size)?
             }
         };
         resumed_bytes += offset;
@@ -649,9 +650,7 @@ async fn drive(control_tx: &mut ControlTx, control_rx: crate::secure::ControlRx,
             let dir = staging.to_path_buf();
             flush_task = Some(tokio::task::spawn_blocking(move || -> Result<()> {
                 // Data first, then the sidecar that claims it (manual §19).
-                for sf in files {
-                    sf.sync_blocking()?;
-                }
+                storage::sync_staged_blocking(&files.iter().map(Arc::as_ref).collect::<Vec<_>>())?;
                 state.save_blocking(&dir)?;
                 Ok(())
             }));
@@ -709,12 +708,17 @@ async fn finalize(inc: &mut Incoming, manifest: &Manifest, dest: &Path, staging:
     let files = manifest.files.clone();
     let rels = inc.rels.clone();
     let dests = inc.dests.clone();
-    let pieces: Vec<Vec<[u8; 32]>> = inc.pieces.iter().map(|p| p.iter().map(|h| h.ok_or_else(|| EngineError::Internal("finalizing with a missing piece hash".into()))).collect::<Result<_>>()).collect::<Result<_>>()?;
+    let mut pieces: Vec<Vec<[u8; 32]>> = inc.pieces.iter().map(|p| p.iter().map(|h| h.ok_or_else(|| EngineError::Internal("finalizing with a missing piece hash".into()))).collect::<Result<_>>()).collect::<Result<_>>()?;
     let dest = dest.to_path_buf();
     let staging = staging.to_path_buf();
     let state = inc.state.clone();
     tokio::task::spawn_blocking(move || -> Result<Vec<PathBuf>> {
-        let mut saved = Vec::with_capacity(files.len());
+        // Paths are checked and directories created first; then every file is synced,
+        // verified and renamed as one batch (one filesystem sync, one fsync per
+        // destination directory), which matters for many small files.
+        let mut saved: Vec<Option<PathBuf>> = vec![None; files.len()];
+        let mut batch = Vec::new();
+        let mut batch_idx = Vec::new();
         for (i, (f, sf)) in files.iter().zip(owned).enumerate() {
             // Re-check at write time: a symlink may have been planted since the
             // manifest was accepted (manual §34).
@@ -723,19 +727,25 @@ async fn finalize(inc: &mut Incoming, manifest: &Manifest, dest: &Path, staging:
                 return Err(EngineError::UnsafePath(f.relative_path.clone()));
             }
             match sf {
-                Some(sf) => saved.push(sf.finalize_with_pieces_blocking(&f.content_hash, &pieces[i])?),
+                Some(sf) => {
+                    batch.push((sf, f.content_hash, std::mem::take(&mut pieces[i])));
+                    batch_idx.push(i);
+                }
                 None => {
                     match std::fs::create_dir(&target) {
                         Ok(()) => {}
                         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && target.is_dir() => {}
                         Err(e) => return Err(e.into()),
                     }
-                    saved.push(target);
+                    saved[i] = Some(target);
                 }
             }
         }
+        for (i, p) in batch_idx.into_iter().zip(storage::finalize_batch_blocking(batch)?) {
+            saved[i] = Some(p);
+        }
         state.remove_blocking(&staging)?;
-        Ok(saved)
+        saved.into_iter().map(|p| p.ok_or_else(|| EngineError::Internal("finalize left a file without a destination".into()))).collect()
     })
     .await?
 }

@@ -197,4 +197,10 @@ impl ManagerConfig {
     pub fn staging_dir(&self) -> PathBuf {
         self.storage_root.join("staging")
     }
+
+    /// `<storage_root>/hashes`: the sender's hash cache, so a retry or resume doesn't
+    /// re-read every file before offering it (manual §19).
+    pub fn hash_cache_dir(&self) -> PathBuf {
+        self.storage_root.join("hashes")
+    }
 }

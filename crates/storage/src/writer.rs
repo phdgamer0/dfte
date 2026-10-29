@@ -8,8 +8,12 @@ use std::path::{Path, PathBuf};
 
 use crate::chunk::{chunk_count, chunk_range};
 use crate::error::{Result, StorageError};
-use crate::fileio::{available_space_blocking, preallocate_blocking, sync_dir_blocking, write_all_at};
+use crate::fileio::{available_space_blocking, preallocate_blocking, sync_dir_blocking, sync_files_blocking, write_all_at};
 use crate::hash::hash_reader_blocking;
+
+/// Below this size a staged file is not pre-allocated: it can't fragment in a way
+/// that matters, and the caller checked free space for the whole transfer.
+pub const PREALLOCATE_MIN: u64 = 1 << 20;
 
 /// Suffix of in-progress staged files.
 pub const STAGING_SUFFIX: &str = ".part";
@@ -45,6 +49,21 @@ impl StagedFile {
         ensure_space(staging_dir, size.saturating_sub(reclaimable))?;
         let file = OpenOptions::new().read(true).write(true).create(true).truncate(true).open(&staging_path)?;
         preallocate_blocking(&file, size)?;
+        Ok(Self { file, staging_path, destination, size })
+    }
+
+    /// Like [`create_blocking`](Self::create_blocking), for a caller that already
+    /// created `staging_dir` and checked free space for every file it is about to
+    /// stage (one `statvfs` per transfer instead of per file). Small files are not
+    /// pre-allocated ([`PREALLOCATE_MIN`]).
+    pub fn create_prechecked_blocking(staging_dir: &Path, name: &str, destination: PathBuf, size: u64) -> Result<Self> {
+        let staging_path = staging_path(staging_dir, name)?;
+        let file = OpenOptions::new().read(true).write(true).create(true).truncate(true).open(&staging_path)?;
+        if size >= PREALLOCATE_MIN {
+            preallocate_blocking(&file, size)?;
+        } else {
+            file.set_len(size)?;
+        }
         Ok(Self { file, staging_path, destination, size })
     }
 
@@ -115,14 +134,21 @@ impl StagedFile {
     /// instead of reading the file back (manual §20). Verifies what was written
     /// from memory; use `finalize_blocking` to also re-check what the OS returns.
     pub fn finalize_with_pieces_blocking(self, expected_hash: &[u8; 32], pieces: &[[u8; 32]]) -> Result<PathBuf> {
-        self.file.sync_all()?;
-        let Some(actual) = crate::file_hash_from_pieces(self.size, pieces) else {
-            return Err(StorageError::PieceCountMismatch { expected: self.chunk_count().max(1), actual: pieces.len() as u64 });
-        };
-        self.commit_blocking(expected_hash, actual)
+        let mut out = finalize_batch_blocking(vec![(self, *expected_hash, pieces.to_vec())])?;
+        out.pop().ok_or(StorageError::PieceCountMismatch { expected: 1, actual: 0 })
     }
 
     fn commit_blocking(self, expected_hash: &[u8; 32], actual: [u8; 32]) -> Result<PathBuf> {
+        let destination = self.verify_and_move_blocking(expected_hash, actual)?;
+        if let Some(parent) = destination.parent() {
+            sync_dir_blocking(parent)?;
+        }
+        Ok(destination)
+    }
+
+    /// Hash check, then rename into place. The caller made the data durable first and
+    /// makes the destination directory durable after.
+    fn verify_and_move_blocking(self, expected_hash: &[u8; 32], actual: [u8; 32]) -> Result<PathBuf> {
         if &actual != expected_hash {
             return Err(StorageError::HashMismatch { path: self.staging_path, expected: *expected_hash, actual });
         }
@@ -130,11 +156,45 @@ impl StagedFile {
         // Windows cannot rename a file with an open handle.
         drop(file);
         move_file_blocking(&staging_path, &destination)?;
-        if let Some(parent) = destination.parent() {
-            sync_dir_blocking(parent)?;
-        }
         Ok(destination)
     }
+}
+
+/// Makes the data of several staged files (one staging directory) durable with one
+/// filesystem sync (see [`sync_files_blocking`]).
+pub fn sync_staged_blocking(files: &[&StagedFile]) -> Result<()> {
+    sync_files_blocking(&files.iter().map(|sf| &sf.file).collect::<Vec<_>>())?;
+    Ok(())
+}
+
+/// Finalizes many staged files (all in one staging directory) with their expected
+/// whole-file hashes and per-chunk piece hashes, like
+/// [`StagedFile::finalize_with_pieces_blocking`] but with one filesystem sync for all
+/// of them and one fsync per distinct destination directory, instead of a file sync and
+/// a directory sync per file (manual §19/§20 durability order kept: data, rename, dir).
+///
+/// Returns the destinations in input order. On an error, files before the failing
+/// one are already in place and the rest stay staged.
+pub fn finalize_batch_blocking(items: Vec<(StagedFile, [u8; 32], Vec<[u8; 32]>)>) -> Result<Vec<PathBuf>> {
+    let mut actual = Vec::with_capacity(items.len());
+    for (sf, _, pieces) in &items {
+        let Some(h) = crate::file_hash_from_pieces(sf.size, pieces) else {
+            return Err(StorageError::PieceCountMismatch { expected: sf.chunk_count().max(1), actual: pieces.len() as u64 });
+        };
+        actual.push(h);
+    }
+    sync_files_blocking(&items.iter().map(|(sf, ..)| &sf.file).collect::<Vec<_>>())?;
+    let mut out = Vec::with_capacity(items.len());
+    for ((sf, expected, _), actual) in items.into_iter().zip(actual) {
+        out.push(sf.verify_and_move_blocking(&expected, actual)?);
+    }
+    let mut dirs: Vec<&Path> = out.iter().filter_map(|p| p.parent()).collect();
+    dirs.sort_unstable();
+    dirs.dedup();
+    for d in dirs {
+        sync_dir_blocking(d)?;
+    }
+    Ok(out)
 }
 
 fn staging_path(staging_dir: &Path, name: &str) -> Result<PathBuf> {

@@ -99,31 +99,50 @@ fn collect_blocking(paths: &[PathBuf]) -> Result<Vec<Entry>> {
 pub(crate) fn build_source_blocking(paths: &[PathBuf], threads: usize, cache: Option<&HashCache>) -> Result<Source> {
     let entries = collect_blocking(paths)?;
     let threads = if threads == 0 { std::thread::available_parallelism().map_or(1, usize::from) } else { threads };
+    let metas: Vec<Option<std::fs::Metadata>> = entries.iter().map(|e| e.src.as_deref().map(storage::source_metadata).transpose()).collect::<std::io::Result<_>>()?;
+    // Files of one chunk or less are hashed in parallel *across* files; bigger ones are
+    // hashed one at a time, each split over every thread. One file per thread was the
+    // bottleneck for many small files (2000 files: 0.46 s on the phone).
+    let small: Vec<usize> = (0..entries.len()).filter(|&i| metas[i].as_ref().is_some_and(|m| m.len() <= storage::CHUNK_SIZE)).collect();
+    let mut hashed: Vec<Option<Hashed>> = (0..entries.len()).map(|_| None).collect();
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let results: Vec<Result<Vec<(usize, Hashed)>>> = std::thread::scope(|s| {
+        let workers: Vec<_> = (0..threads.min(small.len()).max(1))
+            .map(|_| {
+                s.spawn(|| -> Result<Vec<(usize, Hashed)>> {
+                    let mut out = Vec::new();
+                    loop {
+                        let k = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        let Some(&i) = small.get(k) else { return Ok(out) };
+                        if let (Some(path), Some(meta)) = (entries[i].src.as_deref(), metas[i].as_ref()) {
+                            out.push((i, hash_one(path, meta, 1, cache)?));
+                        }
+                    }
+                })
+            })
+            .collect();
+        workers.into_iter().map(|w| w.join().unwrap_or_else(|p| std::panic::resume_unwind(p))).collect()
+    });
+    for r in results {
+        for (i, h) in r? {
+            hashed[i] = Some(h);
+        }
+    }
+
     let mut files = Vec::with_capacity(entries.len());
     let mut sources = Vec::with_capacity(entries.len());
-    for Entry { rel, src } in entries {
-        let Some(path) = src else {
+    for (i, (Entry { rel, src }, meta)) in entries.into_iter().zip(metas).enumerate() {
+        let (Some(path), Some(meta)) = (src, meta) else {
             files.push(FileEntry::dir(rel));
             sources.push(SourceFile { path: None, size: 0, modified: None, pieces: Vec::new() });
             continue;
         };
-        let meta = storage::source_metadata(&path)?;
         let size = meta.len();
         // `modified()` is unsupported on some platforms; then only size guards changes.
         let modified = meta.modified().ok();
-        let (root, pieces) = match cache.and_then(|c| c.get_blocking(&path, &meta)) {
-            Some(hit) => (hit.root, hit.pieces),
-            None => {
-                let (root, pieces) = hash_file_parallel_blocking(&path, threads)?;
-                if let Some(c) = cache
-                    && let Err(e) = c.put_blocking(&path, &meta, &root, &pieces)
-                {
-                    // The hashes are already correct for this send; failing to cache them
-                    // only means the next send hashes again.
-                    tracing::warn!(path = %path.display(), error = %e, "could not update hash cache");
-                }
-                (root, pieces)
-            }
+        let (root, pieces) = match hashed[i].take() {
+            Some(h) => h,
+            None => hash_one(&path, &meta, threads, cache)?,
         };
         if pieces.len() as u64 != storage::chunk_count(size).max(1) {
             return Err(EngineError::SourceFileChanged { path });
@@ -136,6 +155,27 @@ pub(crate) fn build_source_blocking(paths: &[PathBuf], threads: usize, cache: Op
     }
     let manifest = Manifest::new(files).map_err(|e| EngineError::InvalidInput(format!("cannot build manifest: {e}")))?;
     Ok(Source { manifest, files: sources })
+}
+
+/// Whole-file hash and piece hashes.
+type Hashed = ([u8; 32], Vec<[u8; 32]>);
+
+/// Hashes one file, through `cache` for files of at least one chunk: smaller ones hash
+/// faster than a cache lookup and would only fill the cache with entries.
+fn hash_one(path: &std::path::Path, meta: &std::fs::Metadata, threads: usize, cache: Option<&HashCache>) -> Result<Hashed> {
+    let cache = cache.filter(|_| meta.len() >= storage::CHUNK_SIZE);
+    if let Some(hit) = cache.and_then(|c| c.get_blocking(path, meta)) {
+        return Ok((hit.root, hit.pieces));
+    }
+    let (root, pieces) = hash_file_parallel_blocking(path, threads)?;
+    if let Some(c) = cache
+        && let Err(e) = c.put_blocking(path, meta, &root, &pieces)
+    {
+        // The hashes are already correct for this send; failing to cache them
+        // only means the next send hashes again.
+        tracing::warn!(path = %path.display(), error = %e, "could not update hash cache");
+    }
+    Ok((root, pieces))
 }
 
 /// Lazily opened, shared chunk readers. A file is opened on its first chunk read

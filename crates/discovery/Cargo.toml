@@ -19,6 +19,8 @@ default = []
 # Linux wpa_supplicant P2P backend over D-Bus (manual §5 Linux). Off by default: it pulls
 # in zbus and is only meaningful on Linux hosts with a P2P-capable wpa_supplicant.
 linux-wpa = ["dep:zbus", "dep:futures-util"]
+# Linux Wi-Fi Direct through NetworkManager (no root: polkit authorizes desktop users).
+linux-nm = ["dep:zbus"]
 
 [dependencies]
 crypto.workspace = true

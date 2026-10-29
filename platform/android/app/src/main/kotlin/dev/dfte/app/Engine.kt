@@ -57,9 +57,18 @@ data class EngineState(
     val offers: List<IncomingOffer> = emptyList(),
     val verifies: List<VerifyRequest> = emptyList(),
     val visible: Boolean = false,
+    /** Wi-Fi Direct, while a Send or Receive screen is open or a transfer runs over it. */
+    val direct: Direct = Direct.Off,
     /** A message not tied to one transfer; the UI shows it once and clears it. */
     val notice: String? = null,
 )
+
+sealed interface Direct {
+    data object Off : Direct
+    /** Nearby laptops can find this phone and start a connection. */
+    data object Discoverable : Direct
+    data class Linked(val link: DirectLink) : Direct
+}
 
 sealed interface Target {
     data class ToPeer(val peer: Peer) : Target
@@ -97,9 +106,15 @@ class Engine(private val app: Application) : TransferObserver {
     private val lifecycle = Mutex()
     private var listening = false
     private var multicast: WifiManager.MulticastLock? = null
+    val wifiDirect = WifiDirect(app)
+    private var rearm: kotlinx.coroutines.Job? = null
 
     init {
         manager.setObserver(this)
+        wifiDirect.watch(::onLink)
+        // A group or search left over from an earlier process (a crash, a kill) keeps
+        // the radio hopping between channels; nothing here wants one yet.
+        act { wifiDirect.stop() }
     }
 
     // ---- lifecycle -------------------------------------------------------
@@ -128,11 +143,75 @@ class Engine(private val app: Application) : TransferObserver {
     fun background() = act {
         lifecycle.withLock {
             if (_state.value.visible && _state.value.jobs.values.none { it.active }) {
+                stopHostingLocked()
                 manager.stopScan()
                 multicast?.let { if (it.isHeld) it.release() }
                 _state.update { it.copy(visible = false, peers = emptyMap()) }
             }
         }
+    }
+
+    /** A screen peers must reach us from is open: be discoverable over Wi-Fi Direct, if allowed (manual §26: asked in context). */
+    fun hostNearby() = act {
+        lifecycle.withLock {
+            // A running transfer keeps the radio on its channel (see pauseDiscovery).
+            if (_state.value.jobs.values.any { it.active }) return@withLock
+            if (rearm?.isActive == true || !wifiDirect.supported || !wifiDirect.permitted || !wifiDirect.locationReady) return@withLock
+            wifiDirect.discoverable()
+            if (_state.value.direct == Direct.Off) _state.update { it.copy(direct = Direct.Discoverable) }
+            // Android ends peer discovery after about two minutes.
+            rearm = scope.launch {
+                while (true) {
+                    kotlinx.coroutines.delay(REARM_MS)
+                    try {
+                        wifiDirect.discoverable()
+                    } catch (e: Exception) {
+                        Log.w(TAG, "re-arming Wi-Fi Direct discovery failed", e)
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * A transfer is running: stop searching for peers (keeping any group). Peer
+     * discovery makes the radio leave the data channel to scan; measured on the A30,
+     * a LAN transfer with discovery on ran at 1.3 MiB/s instead of ~8.
+     */
+    fun pauseDiscovery() = act {
+        lifecycle.withLock {
+            if (rearm == null) return@withLock
+            rearm?.cancel()
+            rearm = null
+            wifiDirect.stopDiscovery()
+        }
+    }
+
+    /** No screen needs Wi-Fi Direct any more; a link stays up while a transfer runs over it. */
+    fun stopHosting() = act {
+        lifecycle.withLock { if (_state.value.jobs.values.none { it.active }) stopHostingLocked() }
+    }
+
+    private suspend fun stopHostingLocked() {
+        val running = rearm?.isActive == true
+        rearm?.cancel()
+        rearm = null
+        if (!running && _state.value.direct == Direct.Off) return
+        _state.update { it.copy(direct = Direct.Off) }
+        wifiDirect.stop()
+    }
+
+    /** A group formed or ended. As a member, announce ourselves to the owner (it answers). */
+    private fun onLink(link: DirectLink?) {
+        val wanted = rearm?.isActive == true
+        _state.update { it.copy(direct = if (link != null) Direct.Linked(link) else if (wanted) Direct.Discoverable else Direct.Off) }
+        if (link == null) {
+            // Android stops discovery when a group forms; be findable again right away.
+            if (wanted) act { wifiDirect.discoverable() }
+            return
+        }
+        val owner = link.ownerAddress ?: return
+        act { manager.addBeaconTarget("$owner:${WifiDirect.BEACON_PORT}") }
     }
 
     private fun multicastLock(): WifiManager.MulticastLock = multicast ?: (app.getSystemService(Context.WIFI_SERVICE) as WifiManager)
@@ -256,7 +335,9 @@ class Engine(private val app: Application) : TransferObserver {
 
     private fun publish(id: String) = scope.launch(Dispatchers.IO) {
         try {
+            val t0 = android.os.SystemClock.elapsedRealtime()
             val moved = Received.publish(app, Received.stagingFor(app, id))
+            Log.i(TAG, "published ${moved.size} item(s) into Downloads in ${android.os.SystemClock.elapsedRealtime() - t0} ms")
             val where = if (moved.size == 1) "Downloads/DFTE/${moved[0].name}" else "Downloads/DFTE"
             upsert(id) { it.copy(savedTo = where) }
         } catch (e: Exception) {
@@ -268,6 +349,7 @@ class Engine(private val app: Application) : TransferObserver {
     companion object {
         /** Same default as the `dfte` CLI, so `dfte send --to PHONE_IP` just works. */
         const val PORT = 47821
+        private const val REARM_MS = 100_000L
         private const val TAG = "dfte"
     }
 }

@@ -29,5 +29,6 @@ object Icons {
     val Pause = icon("pause", "M9 6v12M15 6v12")
     val Play = icon("play", "M8 5.5v13l10-6.5z")
     val Link = icon("link", "M10 14a4 4 0 0 0 5.66 0l3-3a4 4 0 0 0-5.66-5.66l-1 1", "M14 10a4 4 0 0 0-5.66 0l-3 3a4 4 0 0 0 5.66 5.66l1-1")
+    val Wifi = icon("wifi", "M2.5 9a14 14 0 0 1 19 0", "M6 12.5a9 9 0 0 1 12 0", "M9.5 16a4 4 0 0 1 5 0", "M12 19.5v.01")
     val Alert = icon("alert", "M12 8v5M12 16.5v.01", "M21 12a9 9 0 1 1-18 0a9 9 0 1 1 18 0z")
 }

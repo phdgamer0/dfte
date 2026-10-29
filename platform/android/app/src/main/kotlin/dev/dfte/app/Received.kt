@@ -5,6 +5,8 @@ import android.media.MediaScannerConnection
 import android.os.Environment
 import android.util.Log
 import java.io.File
+import java.io.FileInputStream
+import java.io.FileOutputStream
 
 /**
  * Manual §14: the engine writes into app-private storage (no FUSE in the data
@@ -24,11 +26,17 @@ object Received {
         val moved = ArrayList<File>()
         for (item in from.listFiles().orEmpty().sortedBy { it.name }) {
             val target = unique(dest, item.name)
-            // A rename is metadata-only when both sides are on one volume. If the
-            // platform refuses it, copy and delete instead: slower, never lossy.
+            // A rename is metadata-only when both sides are on one volume. Since Android 11
+            // app storage and Downloads are separate mounts (rename fails), so copy and
+            // delete instead: slower, never lossy.
             if (!item.renameTo(target)) {
-                Log.w("dfte", "rename into Downloads refused for ${item.name}; copying")
-                item.copyRecursively(target, overwrite = false)
+                try {
+                    copyTree(item, target)
+                } catch (e: Exception) {
+                    // Don't leave half a file in Downloads; the staged copy is still whole.
+                    target.deleteRecursively()
+                    throw e
+                }
                 check(item.deleteRecursively()) { "copied ${item.name} but could not remove the staged copy" }
             }
             moved += target
@@ -38,6 +46,33 @@ object Received {
         MediaScannerConnection.scanFile(ctx, files.map { it.path }.toTypedArray(), null, null)
         return moved
     }
+
+    /**
+     * Copies a file or folder. Files go through FileChannel.transferTo in large steps:
+     * Downloads sits behind Android's FUSE layer, where every write is a round trip to the
+     * media provider, so File.copyTo's 8 KiB writes are what made publishing slow.
+     */
+    private fun copyTree(from: File, to: File) {
+        if (from.isDirectory) {
+            if (!to.mkdirs() && !to.isDirectory) error("cannot create ${to.path}")
+            for (child in from.listFiles().orEmpty()) copyTree(child, File(to, child.name))
+            return
+        }
+        FileInputStream(from).channel.use { src ->
+            FileOutputStream(to).channel.use { dst ->
+                val size = src.size()
+                var pos = 0L
+                while (pos < size) {
+                    val n = src.transferTo(pos, minOf(COPY_STEP, size - pos), dst)
+                    if (n <= 0) error("copy of ${from.name} stalled at $pos of $size bytes")
+                    pos += n
+                }
+                dst.force(false)
+            }
+        }
+    }
+
+    private const val COPY_STEP = 8L shl 20
 
     private fun unique(dir: File, name: String): File {
         var f = File(dir, name)

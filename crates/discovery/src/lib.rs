@@ -15,6 +15,8 @@
 //! * [`wpa::WpaDiscovery`]: Linux Wi-Fi Direct over `wpa_supplicant`'s D-Bus API. The zbus
 //!   bus implementation is behind the `linux-wpa` feature; the translation logic is always
 //!   compiled and tested against a mock bus.
+//! * `nm::NmP2p` (feature `linux-nm`): Linux Wi-Fi Direct through NetworkManager, which
+//!   needs no root. Joins a group a phone hosts; beacons then exchange port and fingerprint.
 //!
 //! # Per-platform notes
 //!
@@ -38,6 +40,8 @@
 mod error;
 pub mod fingerprint;
 pub mod lan;
+#[cfg(feature = "linux-nm")]
+pub mod nm;
 pub mod qr;
 pub mod softap;
 pub mod state;

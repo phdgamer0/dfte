@@ -95,6 +95,8 @@ struct Shared {
     quic: QuicTransport,
     listeners: Mutex<Vec<ListenerEntry>>,
     discovery: Mutex<Option<Arc<dyn DynPeerDiscovery>>>,
+    /// The built-in LAN backend, when it is the one in use (see `add_beacon_target`).
+    lan: Mutex<Option<LanDiscovery>>,
     scan: Mutex<Option<JoinHandle<()>>>,
     peers: Mutex<HashMap<PeerHandle, Peer>>,
     /// Job tasks, reaped by the ticker and joined on shutdown.
@@ -132,7 +134,7 @@ impl TransferManager {
         // Detached on purpose: it exits on `Notice::Stop` or when every sender is
         // gone, and joining it from an observer callback would deadlock.
         let _detached = notify::spawn_dispatcher(rx, Arc::clone(&observer))?;
-        let shared = Arc::new(Shared { discovery: Mutex::new(cfg.discovery.clone()), incoming: Arc::new(Semaphore::new(cfg.max_incoming)), cfg, rt: runtime.handle().clone(), jobs: RwLock::new(HashMap::new()), next_seq: AtomicU64::new(0), notices: tx, observer, verifies: Mutex::new(HashMap::new()), next_request: AtomicU64::new(1), tcp, quic, listeners: Mutex::new(Vec::new()), scan: Mutex::new(None), peers: Mutex::new(HashMap::new()), tasks: Mutex::new(JoinSet::new()), ticker: Mutex::new(None), shutting_down: AtomicBool::new(false) });
+        let shared = Arc::new(Shared { discovery: Mutex::new(cfg.discovery.clone()), lan: Mutex::new(None), incoming: Arc::new(Semaphore::new(cfg.max_incoming)), cfg, rt: runtime.handle().clone(), jobs: RwLock::new(HashMap::new()), next_seq: AtomicU64::new(0), notices: tx, observer, verifies: Mutex::new(HashMap::new()), next_request: AtomicU64::new(1), tcp, quic, listeners: Mutex::new(Vec::new()), scan: Mutex::new(None), peers: Mutex::new(HashMap::new()), tasks: Mutex::new(JoinSet::new()), ticker: Mutex::new(None), shutting_down: AtomicBool::new(false) });
         let ticker = runtime.spawn(ticker(Arc::downgrade(&shared), shared.cfg.progress_interval));
         *lock(&shared.ticker) = Some(ticker);
         Ok(Self { shared, runtime: Some(runtime) })
@@ -158,6 +160,15 @@ impl TransferManager {
     /// manager). Takes effect on the next [`start_scan`](Self::start_scan).
     pub fn set_discovery(&self, discovery: Arc<dyn DynPeerDiscovery>) {
         *lock(&self.shared.discovery) = Some(discovery);
+    }
+
+    /// Also exchanges LAN beacons with `target` (a local-scope address): the platform
+    /// learned a peer's address out of band, e.g. the owner of a Wi-Fi Direct group it
+    /// just joined (multicast would leave through the default route instead). The peer
+    /// answers, so both ends then know each other (manual §6, §7).
+    pub fn add_beacon_target(&self, target: SocketAddr) -> Result<()> {
+        lock(self.shared.discovery_backend_lan()?).as_ref().ok_or_else(|| EngineError::Discovery("a platform discovery backend is in use; it does not take beacon targets".into()))?.add_unicast_target(target)?;
+        Ok(())
     }
 
     /// Accepts incoming transfers on `addr` over both TCP and QUIC (same port
@@ -833,9 +844,17 @@ impl Shared {
             return Err(EngineError::Discovery("no platform discovery backend configured".into()));
         }
         let port = lock(&self.listeners).first().map(|l| l.addr.port()).ok_or_else(|| EngineError::InvalidInput("listen before scanning: LAN beacons advertise the listening port".into()))?;
-        let lan: Arc<dyn DynPeerDiscovery> = Arc::new(LanDiscovery::new(LanConfig::new(self.cfg.device_name.clone(), port))?);
+        let backend = LanDiscovery::new(LanConfig::new(self.cfg.device_name.clone(), port))?;
+        *lock(&self.lan) = Some(backend.clone());
+        let lan: Arc<dyn DynPeerDiscovery> = Arc::new(backend);
         *slot = Some(Arc::clone(&lan));
         Ok(lan)
+    }
+
+    /// Makes sure the discovery backend exists; the LAN slot is filled when it is ours.
+    fn discovery_backend_lan(&self) -> Result<&Mutex<Option<LanDiscovery>>> {
+        self.discovery_backend()?;
+        Ok(&self.lan)
     }
 
     async fn start_scan(self: Arc<Self>) -> Result<()> {

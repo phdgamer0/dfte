@@ -36,6 +36,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
+import dev.dfte.app.Direct
 import dev.dfte.app.Copy
 import dev.dfte.app.Engine
 import dev.dfte.app.EngineState
@@ -122,7 +123,7 @@ private fun initials(name: String): String = name.split(' ', '-', '_').filter { 
 // ---- 2 · Send to ------------------------------------------------------------
 
 @Composable
-fun SendToScreen(engine: Engine, state: EngineState, picked: Picked, busy: Boolean, onBack: () -> Unit, onPeer: (Peer) -> Unit, onAddress: () -> Unit) {
+fun SendToScreen(engine: Engine, state: EngineState, picked: Picked, busy: Boolean, onBack: () -> Unit, onPeer: (Peer) -> Unit, onAddress: () -> Unit, onAllowDirect: () -> Unit) {
     Column(Gutter, verticalArrangement = Arrangement.spacedBy(12.dp)) {
         TopBar("Send to", onBack = onBack)
         Card {
@@ -132,19 +133,20 @@ fun SendToScreen(engine: Engine, state: EngineState, picked: Picked, busy: Boole
         Label("Nearby", if (state.visible) "Looking for devices…" else null)
         val peers = state.peers.values.sortedBy { it.displayName.lowercase() }
         if (peers.isEmpty()) {
-            Card { Body("Open DFTE on the other device and choose Receive. Both devices need to be on the same Wi-Fi or this phone's hotspot.", Modifier.padding(16.dp)) }
+            Card { Body("Open DFTE on the other device and choose Receive. Laptops can join this phone over Wi-Fi Direct; phones need the same Wi-Fi or this phone's hotspot.", Modifier.padding(16.dp)) }
         } else {
             Rows(peers) { p ->
                 val trusted = engine.isTrusted(p.fingerprint)
                 ListRow(
                     p.displayName,
-                    caption = if (trusted) "Trusted · Same network" else "New device · Same network",
+                    caption = if (trusted) "Trusted · Nearby" else "New device · Nearby",
                     leading = { Avatar(Icons.Laptop) },
                     trailing = { if (trusted) Ic(Icons.Shield, Dfte.colors.ok) },
                     onClick = { if (!busy) onPeer(p) },
                 )
             }
         }
+        DirectCard(engine, state, onAllowDirect)
         Spacer(Modifier.weight(1f))
         PillButton("Enter address", onAddress, Modifier.fillMaxWidth(), Kind.Secondary, Icons.Link)
         Caption("For devices that don't show up, type the address shown on their Receive screen.", Modifier.fillMaxWidth(), center = true)
@@ -154,8 +156,8 @@ fun SendToScreen(engine: Engine, state: EngineState, picked: Picked, busy: Boole
 // ---- Receive ----------------------------------------------------------------
 
 @Composable
-fun ReceiveScreen(engine: Engine, state: EngineState, onBack: () -> Unit) {
-    val addrs = remember(state.visible) { localAddresses() }
+fun ReceiveScreen(engine: Engine, state: EngineState, onBack: () -> Unit, onAllowDirect: () -> Unit) {
+    val addrs = remember(state.visible, state.direct) { localAddresses() }
     Column(Gutter.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         TopBar("Receive", onBack = onBack)
         Card {
@@ -164,6 +166,7 @@ fun ReceiveScreen(engine: Engine, state: EngineState, onBack: () -> Unit) {
                 Body("Open DFTE on the other device and choose Send.", center = true)
             }
         }
+        DirectCard(engine, state, onAllowDirect)
         Spacer(Modifier.height(4.dp))
         Label("This phone")
         Rows(listOf("addr", "fp")) { k ->
@@ -174,6 +177,32 @@ fun ReceiveScreen(engine: Engine, state: EngineState, onBack: () -> Unit) {
             }
         }
         Caption("Received files are saved to Downloads/DFTE. Keep this screen open until a transfer starts.")
+    }
+}
+
+/** Wi-Fi Direct status, or the in-context permission ask (manual §26) with an honest reason. */
+@Composable
+private fun DirectCard(engine: Engine, state: EngineState, onAllow: () -> Unit) {
+    if (!engine.wifiDirect.supported) return
+    val context = androidx.compose.ui.platform.LocalContext.current
+    Card {
+        when {
+            state.direct is Direct.Linked -> ListRow("Wi-Fi Direct connected", caption = "Linked to a nearby device · no router needed", leading = { Ic(Icons.Wifi, Dfte.colors.ok) })
+            state.direct == Direct.Discoverable -> ListRow("Wi-Fi Direct is on", caption = "Laptops nearby can find this phone. Accept Android's invitation when it appears.", leading = { Ic(Icons.Wifi, Dfte.colors.ok) })
+            !engine.wifiDirect.permitted -> ListRow(
+                "Connect without a router",
+                caption = "Android files Wi-Fi Direct under Location. DFTE never reads where you are.",
+                leading = { Ic(Icons.Wifi) },
+                trailing = { PillButton("Allow", onAllow, small = true, kind = Kind.Secondary) },
+            )
+            !engine.wifiDirect.locationReady -> ListRow(
+                "Turn on Location for Wi-Fi Direct",
+                caption = "This Android version needs it to find nearby devices. DFTE never reads where you are.",
+                leading = { Ic(Icons.Wifi) },
+                trailing = { PillButton("Settings", { context.startActivity(android.content.Intent(android.provider.Settings.ACTION_LOCATION_SOURCE_SETTINGS)) }, small = true, kind = Kind.Secondary) },
+            )
+            else -> ListRow("Starting Wi-Fi Direct…", leading = { Ic(Icons.Wifi) }, muted = true)
+        }
     }
 }
 

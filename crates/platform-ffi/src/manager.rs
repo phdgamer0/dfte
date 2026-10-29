@@ -205,6 +205,12 @@ impl TransferManager {
         Ok(self.inner.stop_scan().await?)
     }
 
+    /// Also exchanges discovery beacons with `addr` (`"192.168.49.1:47820"`): the owner
+    /// of a Wi-Fi Direct group this device joined. Local-scope addresses only.
+    pub fn add_beacon_target(&self, addr: String) -> Result<()> {
+        Ok(self.inner.add_beacon_target(parse_addr(&addr)?)?)
+    }
+
     pub fn peers(&self) -> Vec<Peer> {
         self.inner.peers().into_iter().map(Into::into).collect()
     }

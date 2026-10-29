@@ -639,7 +639,10 @@ async fn drive(control_tx: &mut ControlTx, control_rx: crate::secure::ControlRx,
             Event::Failed(e) => break Err(e),
             Event::StreamFailed(e) => break Err(explain_stream_failure(&mut ev_rx, e).await),
         }
-        if unflushed >= opts.flush_every.max(1) && flush_task.is_none() {
+        // Once every chunk is in, finalize syncs the files anyway; a periodic flush here
+        // would only make the sender wait for an extra fsync of the last stretch (it
+        // showed up as ~1 s of "finalize" per 128 MiB on the phone's eMMC).
+        if unflushed >= opts.flush_every.max(1) && flush_task.is_none() && missing != 0 {
             unflushed = 0;
             let files: Vec<Arc<StagedFile>> = std::mem::take(&mut dirty).into_iter().filter_map(|i| inc.staged[i].clone()).collect();
             let state = inc.state.clone();

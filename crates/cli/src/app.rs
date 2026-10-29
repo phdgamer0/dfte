@@ -22,6 +22,7 @@ use crate::progress::{Reporter, human_bytes, human_rate};
 use crate::select::{Pick, Target, parse_choice, parse_target, pick};
 use crate::trust::{TrustStore, normalize_fingerprint};
 use crate::verify::{Expected, Role, TerminalVerifier, stdin_is_interactive};
+use crate::wifi_direct;
 use crate::{identity, offer, paths};
 
 /// Default engine port (TCP and UDP/QUIC), next to the beacon port.
@@ -86,6 +87,9 @@ pub struct BeaconArgs {
     /// Don't use multicast discovery (only --beacon-to targets).
     #[arg(long)]
     pub no_multicast: bool,
+    /// First join this device's Wi-Fi Direct group (its name or P2P address; Linux, no router needed).
+    #[arg(long, value_name = "DEVICE")]
+    pub wifi_direct: Option<String>,
 }
 
 #[derive(Subcommand, Debug)]
@@ -237,14 +241,29 @@ async fn run(cli: Cli, peer_name: Arc<Mutex<Option<String>>>) -> Result<(), CliE
         Cmd::Trust { cmd } => cmd_trust(&data, cmd, cli.json),
         Cmd::Resumable { discard } => cmd_resumable(&data, discard, cli.json),
         Cmd::Qr { ssid, psk, ip, port } => cmd_qr(&data, ssid, psk, ip, port, cli.json),
-        Cmd::Peers { timeout, beacon } => cmd_peers(&data, timeout, &beacon, cli.json).await,
-        Cmd::Receive { dir, port, bind, transport, once, accept_from, beacon } => {
-            let a = ReceiveArgs { dir, listen: SocketAddr::new(bind, port), transport, once, accept_from, beacon, json: cli.json };
-            cmd_receive(&data, a, peer_name).await
+        Cmd::Peers { timeout, beacon } => {
+            if beacon.wifi_direct.is_some() {
+                // Listing only listens; a group owner answers devices that announce themselves.
+                return Err(CliError::Usage("--wifi-direct works with send and receive; `dfte peers` only lists devices on a shared network.".into()));
+            }
+            cmd_peers(&data, timeout, &beacon, cli.json).await
         }
-        Cmd::Send { paths, to, expect, streams, transport, scan_timeout, beacon } => {
+        Cmd::Receive { dir, port, bind, transport, once, accept_from, mut beacon } => {
+            let link = wifi_direct::join(&mut beacon, cli.json).await?;
+            let a = ReceiveArgs { dir, listen: SocketAddr::new(bind, port), transport, once, accept_from, beacon, json: cli.json };
+            let r = cmd_receive(&data, a, peer_name).await;
+            wifi_direct::leave(link).await;
+            r
+        }
+        Cmd::Send { paths, mut to, expect, streams, transport, scan_timeout, mut beacon } => {
+            let link = wifi_direct::join(&mut beacon, cli.json).await?;
+            if let Some(addr) = wifi_direct::receiver(link.as_ref(), to.as_deref()) {
+                to = Some(addr.to_string());
+            }
             let a = SendArgs { paths, to, expect, streams: usize::from(streams), transport, scan_timeout: Duration::from_secs(scan_timeout), beacon, json: cli.json };
-            cmd_send(&data, a, peer_name).await
+            let r = cmd_send(&data, a, peer_name).await;
+            wifi_direct::leave(link).await;
+            r
         }
     }
 }

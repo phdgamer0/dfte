@@ -41,7 +41,7 @@ import kotlinx.coroutines.launch
  * whatever is on screen, because they can arrive at any time.
  */
 @Composable
-fun AppRoot(app: DfteApp, pickFiles: () -> Unit, askPermissions: () -> Unit) {
+fun AppRoot(app: DfteApp, pickFiles: () -> Unit, askPermissions: () -> Unit, allowWifiDirect: () -> Unit) {
     val engine = app.engine
     val nav = app.nav
     val state by engine.state.collectAsStateWithLifecycle()
@@ -51,6 +51,18 @@ fun AppRoot(app: DfteApp, pickFiles: () -> Unit, askPermissions: () -> Unit) {
     val slide = with(LocalDensity.current) { 24.dp.roundToPx() }
 
     BackHandler(enabled = nav.stack.size > 1) { nav.pop() }
+
+    // Wi-Fi Direct is on only while a screen peers must reach us from is open; a
+    // transfer pauses the peer search but keeps the group it runs over.
+    val wantsGroup = nav.wantsPeers
+    val anyActive = state.jobs.values.any { it.active }
+    LaunchedEffect(wantsGroup, anyActive) {
+        when {
+            anyActive -> engine.pauseDiscovery()
+            wantsGroup -> engine.hostNearby()
+            else -> engine.stopHosting()
+        }
+    }
 
     fun send(screen: Screen.SendTo, target: Target) {
         if (sending) return
@@ -81,14 +93,15 @@ fun AppRoot(app: DfteApp, pickFiles: () -> Unit, askPermissions: () -> Unit) {
         ) { screen ->
             when (screen) {
                 Screen.Home -> HomeScreen(engine, state, onSend = pickFiles, onReceive = { nav.push(Screen.Receive) }, onOpen = { nav.push(Screen.Transfer(it)) })
-                Screen.Receive -> ReceiveScreen(engine, state, onBack = { nav.pop() })
+                Screen.Receive -> ReceiveScreen(engine, state, onBack = { nav.pop() }, onAllowDirect = allowWifiDirect)
                 is Screen.SendTo -> SendToScreen(
                     engine, state, screen.picked, sending,
                     onBack = { nav.pop() },
                     onPeer = { send(screen, Target.ToPeer(it)) },
                     onAddress = { addressFor = screen },
+                    onAllowDirect = allowWifiDirect,
                 )
-                is Screen.Transfer -> TransferScreen(engine, state.jobs[screen.id], onBack = { nav.pop() }, onDone = { nav.home() })
+                is Screen.Transfer -> TransferScreen(engine, state.jobs[screen.id], onBack = { nav.pop() }, onDone = { nav.doneReceiving() })
             }
         }
 

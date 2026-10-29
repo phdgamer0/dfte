@@ -17,9 +17,13 @@
 //! (`--to FP`, `--expect`, `--accept-from`), it is in the trust store, or the
 //! user confirms the 6-digit code on a terminal. There is no skip flag (§35).
 //!
-//! # Not covered (needs root or hardware)
-//! Hosting the iOS SoftAP (`dfte qr` only prints the payload) and Wi-Fi Direct
-//! via `wpa_supplicant`; discovery here is LAN beacons only.
+//! # Wi-Fi Direct
+//! `--wifi-direct DEVICE` joins a group the other device hosts through
+//! NetworkManager (no root), then discovers it with beacons over that group.
+//!
+//! # Not covered (needs root)
+//! Hosting the iOS SoftAP (`dfte qr` only prints the payload), and Wi-Fi Direct
+//! groups this machine owns (NetworkManager wants dnsmasq for those).
 
 pub mod app;
 pub mod error;
@@ -31,3 +35,4 @@ pub mod progress;
 pub mod select;
 pub mod trust;
 pub mod verify;
+pub mod wifi_direct;

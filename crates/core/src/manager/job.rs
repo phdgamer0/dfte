@@ -16,6 +16,8 @@ use crate::report::Direction;
 
 /// Throughput is averaged over this window (manual §39: rolling 1 s).
 const THROUGHPUT_WINDOW: Duration = Duration::from_secs(1);
+/// A stall longer than this reads as 0 B/s (see `Inner::sample`).
+const STALL_WINDOW: Duration = Duration::from_secs(8);
 
 /// Why the current attempt is being stopped locally.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -130,14 +132,30 @@ impl Inner {
     }
 
     /// Records a throughput sample; returns the rolling rate in bytes/s.
+    ///
+    /// Progress moves in whole chunks, so only *growth* is kept, and the rate is
+    /// measured between the moments data landed (about one window apart). A plain
+    /// time window misreads chunky progress: on a 2.5 MiB/s link a 1 s window
+    /// holds either no chunk (0 B/s, which the app showed as "—") or one (4 MiB/s).
+    /// A silence longer than the measured span stretches it (the rate decays), and
+    /// one longer than [`STALL_WINDOW`] reads as 0.
     pub fn sample(&mut self, now: Instant, bytes: u64) -> u64 {
-        self.samples.push_back((now, bytes));
-        while self.samples.len() > 2 && self.samples.get(1).is_some_and(|(t, _)| now.duration_since(*t) >= THROUGHPUT_WINDOW) {
+        if self.samples.back().is_none_or(|&(_, b)| bytes > b) {
+            self.samples.push_back((now, bytes));
+        }
+        while self.samples.len() > 1 && self.samples.front().is_some_and(|&(t, _)| now.duration_since(t) > STALL_WINDOW) {
             self.samples.pop_front();
+        }
+        if let Some(&(last, _)) = self.samples.back() {
+            while self.samples.len() > 2 && self.samples.get(1).is_some_and(|&(t, _)| last.duration_since(t) >= THROUGHPUT_WINDOW) {
+                self.samples.pop_front();
+            }
         }
         self.throughput = match (self.samples.front(), self.samples.back()) {
             (Some(&(t0, b0)), Some(&(t1, b1))) if t1 > t0 => {
-                let secs = t1.duration_since(t0).as_secs_f64();
+                let span = t1.duration_since(t0);
+                let silence = now.saturating_duration_since(t1);
+                let secs = if silence > span { now.duration_since(t0) } else { span }.as_secs_f64();
                 (b1.saturating_sub(b0) as f64 / secs) as u64
             }
             _ => 0,
@@ -189,11 +207,36 @@ mod tests {
         assert!((95_000_000..=105_000_000).contains(&rate), "{rate}");
         // Window holds about 1 s of samples, not all 2 s.
         assert!(g.samples.len() <= 12, "{}", g.samples.len());
-        // Stalled for 2 s: rate decays to 0.
+        // Stalled for 2 s: still a (lower) rate, since chunks land in bursts.
         for i in 21..=40u64 {
             rate = g.sample(t0 + Duration::from_millis(100 * i), 200_000_000);
         }
+        assert!(rate > 0 && rate < 50_000_000, "{rate}");
+        // Stalled longer than the stall window: 0.
+        for i in 41..=130u64 {
+            rate = g.sample(t0 + Duration::from_millis(100 * i), 200_000_000);
+        }
         assert_eq!(rate, 0);
+    }
+
+    /// 4 MiB chunks landing every 1.6 s (2.5 MiB/s), ticks every 250 ms: the rate
+    /// never drops to 0 between chunks (it did with a plain 1 s window: the app showed "—").
+    #[test]
+    fn slow_chunky_progress_keeps_a_rate() {
+        let job = Job::new("j".into(), 0, Direction::Send, TransportKind::Tcp, None, TransferState::Transferring);
+        let mut g = job.lock();
+        let t0 = Instant::now();
+        g.start_rate(t0, 0);
+        const CHUNK: u64 = 4 << 20;
+        for tick in 1..=80u64 {
+            let ms = tick * 250;
+            let rate = g.sample(t0 + Duration::from_millis(ms), (ms / 1600) * CHUNK);
+            if ms >= 1600 {
+                assert!(rate > 0, "0 B/s at {ms} ms");
+            }
+        }
+        // True rate: 2.62 MB/s (4 MiB per 1.6 s); tick quantization allows a little slack.
+        assert!((2_200_000..=3_200_000).contains(&g.throughput), "{}", g.throughput);
     }
 
     #[test]

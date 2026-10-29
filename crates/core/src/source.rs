@@ -26,6 +26,8 @@ pub(crate) struct SourceFile {
 pub(crate) struct Source {
     pub manifest: Manifest,
     pub files: Vec<SourceFile>,
+    /// Files whose hashes came from the cache.
+    pub cache_hits: u64,
 }
 
 struct Entry {
@@ -99,6 +101,7 @@ fn collect_blocking(paths: &[PathBuf]) -> Result<Vec<Entry>> {
 pub(crate) fn build_source_blocking(paths: &[PathBuf], threads: usize, cache: Option<&HashCache>) -> Result<Source> {
     let entries = collect_blocking(paths)?;
     let threads = if threads == 0 { std::thread::available_parallelism().map_or(1, usize::from) } else { threads };
+    let cache_hits = std::sync::atomic::AtomicU64::new(0);
     let metas: Vec<Option<std::fs::Metadata>> = entries.iter().map(|e| e.src.as_deref().map(storage::source_metadata).transpose()).collect::<std::io::Result<_>>()?;
     // Files of one chunk or less are hashed in parallel *across* files; bigger ones are
     // hashed one at a time, each split over every thread. One file per thread was the
@@ -115,7 +118,7 @@ pub(crate) fn build_source_blocking(paths: &[PathBuf], threads: usize, cache: Op
                         let k = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                         let Some(&i) = small.get(k) else { return Ok(out) };
                         if let (Some(path), Some(meta)) = (entries[i].src.as_deref(), metas[i].as_ref()) {
-                            out.push((i, hash_one(path, meta, 1, cache)?));
+                            out.push((i, hash_one(path, meta, 1, cache, &cache_hits)?));
                         }
                     }
                 })
@@ -142,7 +145,7 @@ pub(crate) fn build_source_blocking(paths: &[PathBuf], threads: usize, cache: Op
         let modified = meta.modified().ok();
         let (root, pieces) = match hashed[i].take() {
             Some(h) => h,
-            None => hash_one(&path, &meta, threads, cache)?,
+            None => hash_one(&path, &meta, threads, cache, &cache_hits)?,
         };
         if pieces.len() as u64 != storage::chunk_count(size).max(1) {
             return Err(EngineError::SourceFileChanged { path });
@@ -154,7 +157,7 @@ pub(crate) fn build_source_blocking(paths: &[PathBuf], threads: usize, cache: Op
         sources.push(SourceFile { path: Some(path), size, modified, pieces });
     }
     let manifest = Manifest::new(files).map_err(|e| EngineError::InvalidInput(format!("cannot build manifest: {e}")))?;
-    Ok(Source { manifest, files: sources })
+    Ok(Source { manifest, files: sources, cache_hits: cache_hits.load(std::sync::atomic::Ordering::Relaxed) })
 }
 
 /// Whole-file hash and piece hashes.
@@ -162,9 +165,10 @@ type Hashed = ([u8; 32], Vec<[u8; 32]>);
 
 /// Hashes one file, through `cache` for files of at least one chunk: smaller ones hash
 /// faster than a cache lookup and would only fill the cache with entries.
-fn hash_one(path: &std::path::Path, meta: &std::fs::Metadata, threads: usize, cache: Option<&HashCache>) -> Result<Hashed> {
+fn hash_one(path: &std::path::Path, meta: &std::fs::Metadata, threads: usize, cache: Option<&HashCache>, hits: &std::sync::atomic::AtomicU64) -> Result<Hashed> {
     let cache = cache.filter(|_| meta.len() >= storage::CHUNK_SIZE);
     if let Some(hit) = cache.and_then(|c| c.get_blocking(path, meta)) {
+        hits.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         return Ok((hit.root, hit.pieces));
     }
     let (root, pieces) = hash_file_parallel_blocking(path, threads)?;

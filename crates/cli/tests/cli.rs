@@ -356,21 +356,25 @@ fn sigint_then_rerun_resumes() {
     std::fs::write(&f, data(len, 3)).unwrap();
     let out = b.root.path().join("out");
     // One receiver serves both attempts (it keeps listening after a cancel).
-    let mut r = receiver(&b, &out, "tcp", &["--accept-from", &fa]);
+    // -v: on a failure, the receiver's log says what it persisted and resumed.
+    let mut r = receiver(&b, &out, "tcp", &["--accept-from", &fa, "-v"]);
     let port = r.listen_port();
     // One stream and a small window so the first attempt is still running when interrupted.
     let args = ["--expect", fb.as_str(), "--streams", "1"];
 
-    // Slow the first attempt down (debug-build hook, 50 ms per 4 MiB chunk, so at
-    // least 1.6 s for 128 MiB). Otherwise a fast CI runner finishes the transfer
+    // Slow the first attempt down (debug-build hook, 100 ms per 4 MiB chunk, so at
+    // least 3.2 s for 128 MiB). Otherwise a fast CI runner finishes the transfer
     // before the SIGINT lands and the sender exits 0 (seen on ubuntu-latest).
     let mut c = a.cmd();
-    c.env("DFTE_TEST_CHUNK_DELAY_MS", "50").args(["--json", "send"]).arg(&f).args(["--to", &format!("127.0.0.1:{port}"), "--transport", "tcp"]).args(BEACON).args(args);
+    c.env("DFTE_TEST_CHUNK_DELAY_MS", "100").args(["--json", "send"]).arg(&f).args(["--to", &format!("127.0.0.1:{port}"), "--transport", "tcp"]).args(BEACON).args(args);
     let s = Proc::spawn(c);
-    // Interrupt only once the receiver has confirmed a chunk: its first progress
-    // line is printed on the first one. The sender's own first line can come
-    // before any chunk lands, and then there is nothing to resume (seen on macOS).
+    // Interrupt only once the receiver holds a contiguous prefix. Its first progress
+    // line means *a* chunk is confirmed, not chunk 0: the receiver writes chunks in
+    // parallel, and on macOS chunk 1 finished first, so the resumable prefix was
+    // still empty (§19 resumes from the highest contiguous offset). ~8 more chunks
+    // land in 0.8 s, which fills any gap at the front; the attempt runs >= 3.2 s.
     r.wait_for("Receiving ");
+    std::thread::sleep(Duration::from_millis(800));
     s.interrupt();
     let (ss, _, serr) = s.finish();
     assert_code(ss, 130, &serr);
@@ -379,11 +383,14 @@ fn sigint_then_rerun_resumes() {
     let resumable = b.run_ok(&["resumable", "--json"]);
     let list: serde_json::Value = serde_json::from_str(&resumable).unwrap();
     assert_eq!(list.as_array().unwrap().len(), 1, "{resumable}");
+    let held = list[0]["bytes_received"].as_u64().unwrap();
+    assert!(held > 0, "nothing resumable was persisted: {resumable}\nreceiver log:\n{}", r.stderr_all.lock().unwrap());
 
     let (ss, sout, serr) = sender(&a, &[&f], port, "tcp", &args).finish();
     assert_code(ss, 0, &serr);
     let rep = report(&sout);
-    assert!(rep["resumed_bytes"].as_u64().unwrap() > 0, "{rep}");
+    // Exactly what the receiver persisted: the contiguous prefix, no more, no less.
+    assert_eq!(rep["resumed_bytes"].as_u64().unwrap(), held, "{rep}\nreceiver log:\n{}", r.stderr_all.lock().unwrap());
     r.wait_for("Waiting for the next transfer");
     r.interrupt();
     let (rs, _, rerr) = r.finish();

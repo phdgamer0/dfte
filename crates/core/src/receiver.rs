@@ -507,7 +507,7 @@ async fn run(mut sc: SecureConnection, staging: PathBuf, dest: Dest<'_>, opts: &
             let bytes_transferred = bytes_total - inc.resumed_bytes;
             let chunks = manifest.files.iter().map(|f| u64::from(f.chunk_count)).sum::<u64>();
             tracing::info!(bytes = bytes_transferred, secs = transfer_secs, "receive complete");
-            Ok(TransferReport { direction: Direction::Receive, transfer_id: manifest.transfer_id.to_string(), peer_fingerprint: peer.fingerprint, peer_name: peer.device_name, transport: kind_name(kind), cipher, streams, files: manifest.files.len(), bytes_total, bytes_transferred, resumed_bytes: inc.resumed_bytes, chunks, retransmits: 0, total_secs: secs(started.elapsed()), throughput_bytes_per_sec: rate(bytes_transferred, transfer_secs), end_to_end_bytes_per_sec: rate(bytes_transferred, transfer_secs + timings.finalize_secs), timings, saved })
+            Ok(TransferReport { direction: Direction::Receive, transfer_id: manifest.transfer_id.to_string(), peer_fingerprint: peer.fingerprint, peer_name: peer.device_name, transport: kind_name(kind), cipher, streams, files: manifest.files.len(), bytes_total, bytes_transferred, resumed_bytes: inc.resumed_bytes, hash_cache_hits: 0, chunks, retransmits: 0, total_secs: secs(started.elapsed()), throughput_bytes_per_sec: rate(bytes_transferred, transfer_secs), end_to_end_bytes_per_sec: rate(bytes_transferred, transfer_secs + timings.finalize_secs), timings, saved })
         }
         Err(e) => {
             if let Err(se) = xfer.on_event(TransferEvent::IntegrityFailure) {

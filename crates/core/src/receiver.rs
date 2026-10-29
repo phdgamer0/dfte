@@ -207,10 +207,44 @@ fn rehash_prefix_blocking(sf: &StagedFile, offset: u64, pieces: &mut [Option<[u8
 }
 
 enum Event {
-    ChunkDone { file: u32, chunk: u32, hash: [u8; 32] },
+    ChunkDone {
+        file: u32,
+        chunk: u32,
+        hash: [u8; 32],
+    },
     Control(Control),
     ControlEof,
     Failed(EngineError),
+    /// A data stream broke; the control stream may still carry the reason.
+    StreamFailed(EngineError),
+}
+
+/// How long a data-stream failure waits for the peer's reason on the control stream.
+const STREAM_FAILURE_GRACE: Duration = Duration::from_millis(500);
+
+/// A sender that cancels or shuts down resets its data streams, and on QUIC
+/// the reset can overtake the `Cancel` sent on the control stream just before
+/// it. Briefly look for that reason so a cancel isn't reported as a lost peer;
+/// `e` stands if none arrives (mirrors the sender's `explain_stream_failure`).
+async fn explain_stream_failure(ev_rx: &mut mpsc::Receiver<Event>, e: EngineError) -> EngineError {
+    let reason = async {
+        while let Some(ev) = ev_rx.recv().await {
+            match ev {
+                Event::Control(Control::Cancel) => return Some(EngineError::Cancelled),
+                Event::Control(Control::Close(r)) => return Some(EngineError::from_peer_close(r)),
+                Event::ControlEof | Event::Failed(_) => return None,
+                _ => {}
+            }
+        }
+        None
+    };
+    match tokio::time::timeout(STREAM_FAILURE_GRACE, reason).await {
+        Ok(Some(reason)) => {
+            tracing::debug!(error = %e, reason = %reason, "data stream failed because the peer stopped the transfer");
+            reason
+        }
+        Ok(None) | Err(_) => e,
+    }
 }
 
 fn control_event(r: Result<Option<Control>>) -> Event {
@@ -524,7 +558,7 @@ async fn drive(control_tx: &mut ControlTx, control_rx: crate::secure::ControlRx,
         set.spawn(
             async move {
                 if let Err(e) = fut.await {
-                    forward_bounded(&events, Event::Failed(e)).await;
+                    forward_bounded(&events, Event::StreamFailed(e)).await;
                 }
             }
             .in_current_span(),
@@ -603,6 +637,7 @@ async fn drive(control_tx: &mut ControlTx, control_rx: crate::secure::ControlRx,
             Event::Control(other) => break Err(EngineError::violation(format!("unexpected {other:?} during transfer"))),
             Event::ControlEof => break Err(EngineError::PeerLost),
             Event::Failed(e) => break Err(e),
+            Event::StreamFailed(e) => break Err(explain_stream_failure(&mut ev_rx, e).await),
         }
         if unflushed >= opts.flush_every.max(1) && flush_task.is_none() {
             unflushed = 0;

@@ -325,6 +325,13 @@ async fn beacon_targets_need_a_listener_and_a_local_address() {
     n.m.shutdown().await.unwrap();
 }
 
+/// Engine logs (info and up) into the test's captured output, which libtest prints
+/// only for a failing test: a CI-only failure then explains itself.
+fn init_logs() {
+    // Another test in this binary may have installed it already.
+    let _ = tracing_subscriber::fmt().with_test_writer().with_ansi(false).with_env_filter("info").try_init();
+}
+
 /// Resume sidecars in a staging directory (panics with the reason if unreadable).
 fn staging_report(staging: &Path) -> Vec<storage::ResumeState> {
     storage::scan_orphans_blocking(staging).unwrap_or_else(|e| panic!("cannot scan {}: {e}; contents: {:?}", staging.display(), list_dir(staging)))
@@ -364,6 +371,7 @@ fn slow_sender(kind: TransportKind) -> Node {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn pause_then_resume_continues_from_receiver_sidecar() {
+    init_logs();
     let mut rx_node = trusting(TransportKind::Tcp, "receiver", None);
     let out = rx_node.root.join("out");
     let mut rx_policy_out = Some(out.clone());

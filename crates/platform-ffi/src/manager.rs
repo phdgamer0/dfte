@@ -27,7 +27,8 @@ pub struct ManagerConfig {
     /// App-private directory (manual §14); staging lives under it.
     pub storage_root: String,
     pub device_name: String,
-    /// Default: TCP on Windows, QUIC elsewhere (manual §15).
+    /// Backend for sends; default `TransportKind::platform_default` (TCP on Windows
+    /// and on Linux/Android kernels without UDP GSO, QUIC elsewhere; manual §15).
     pub transport: Option<TransportKind>,
     pub verify_timeout_ms: Option<u64>,
     pub accept_timeout_ms: Option<u64>,

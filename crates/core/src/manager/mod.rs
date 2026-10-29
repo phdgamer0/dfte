@@ -160,11 +160,12 @@ impl TransferManager {
         *lock(&self.shared.discovery) = Some(discovery);
     }
 
-    /// Accepts incoming transfers on `addr` with the configured transport.
+    /// Accepts incoming transfers on `addr` over both TCP and QUIC (same port
+    /// number): the sender picks the backend for its own platform (manual §15).
     /// Returns the bound address (useful with port 0).
     pub async fn listen(&self, addr: SocketAddr) -> Result<SocketAddr> {
-        let kind = self.shared.cfg.transport;
-        self.listen_on(kind, addr).await
+        let s = Arc::clone(&self.shared);
+        self.run(async move { s.listen_both(addr).await }).await
     }
 
     /// [`listen`](Self::listen) with an explicit backend. TCP and QUIC can listen
@@ -671,6 +672,16 @@ impl Shared {
     }
 
     // ---- receiving ------------------------------------------------------
+
+    async fn listen_both(self: Arc<Self>, addr: SocketAddr) -> Result<SocketAddr> {
+        self.ensure_running()?;
+        let (t, q) = transport::listen_pair(&self.tcp, &self.quic, addr).await?;
+        let local = t.local_addr()?;
+        let tasks = [(TransportKind::Tcp, self.rt.spawn(Arc::clone(&self).accept_loop(t))), (TransportKind::Quic, self.rt.spawn(Arc::clone(&self).accept_loop(q)))];
+        tracing::info!(addr = %local, "listening (tcp+quic)");
+        lock(&self.listeners).extend(tasks.map(|(kind, task)| ListenerEntry { kind, addr: local, task }));
+        Ok(local)
+    }
 
     async fn listen(self: Arc<Self>, kind: TransportKind, addr: SocketAddr) -> Result<SocketAddr> {
         self.ensure_running()?;

@@ -221,6 +221,28 @@ fn pinned_send_receive_tcp_and_quic() {
     }
 }
 
+/// The default `--transport auto` receiver takes senders on either backend at
+/// one port (each sender's backend follows its own kernel, manual §15).
+#[test]
+fn auto_receiver_serves_tcp_and_quic_senders() {
+    let (a, b) = (Device::new("alice"), Device::new("bob"));
+    let (fa, fb) = (a.fingerprint(), b.fingerprint());
+    let out = b.root.path().join("out");
+    let mut r = receiver(&b, &out, "auto", &["--accept-from", &fa]);
+    let port = r.listen_port();
+    for (i, transport) in ["tcp", "quic", "auto"].into_iter().enumerate() {
+        let src = a.root.path().join(format!("f{i}.bin"));
+        std::fs::write(&src, data(1 << 20, i as u64)).unwrap();
+        let (ss, sout, serr) = sender(&a, &[&src], port, transport, &["--expect", &fb]).finish();
+        assert_code(ss, 0, &serr);
+        if transport != "auto" {
+            assert_eq!(report(&sout)["transport"], transport);
+        }
+        assert_eq!(std::fs::read(out.join(format!("f{i}.bin"))).unwrap(), data(1 << 20, i as u64));
+    }
+    drop(r);
+}
+
 /// `trust add` on both sides, then `--to NAME` resolved through the trust store
 /// and found by (unicast) LAN discovery: no prompt anywhere.
 #[test]

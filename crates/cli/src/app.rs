@@ -15,7 +15,7 @@ use discovery::lan::{DEFAULT_BEACON_PORT, LanConfig, LanDiscovery};
 use discovery::qr::QrPayload;
 use discovery::softap::SoftApCredentials;
 use discovery::{DiscoveryEvent, Peer, PeerDiscovery};
-use transport::{Listener, QuicConfig, QuicTransport, TcpTransport, Transport};
+use transport::{DualListener, Listener, QuicConfig, QuicTransport, TcpTransport, Transport, TransportKind};
 
 use crate::error::{CliError, ExitCode};
 use crate::progress::{Reporter, human_bytes, human_rate};
@@ -52,13 +52,26 @@ pub struct Cli {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 pub enum TransportArg {
+    /// Receive: listen on TCP and QUIC (same port). Send: this device's
+    /// default (manual §15, `TransportKind::platform_default`).
+    Auto,
     Tcp,
     Quic,
 }
 
-/// Manual §15 per-platform default: QUIC, except TCP on Windows.
 pub fn default_transport() -> TransportArg {
-    if cfg!(windows) { TransportArg::Tcp } else { TransportArg::Quic }
+    TransportArg::Auto
+}
+
+impl TransportArg {
+    /// The backend a send uses.
+    fn for_send(self) -> TransportKind {
+        match self {
+            Self::Auto => TransportKind::platform_default(),
+            Self::Tcp => TransportKind::Tcp,
+            Self::Quic => TransportKind::Quic,
+        }
+    }
 }
 
 /// LAN discovery socket settings (beacons are signed; manual §41 dev backend).
@@ -90,7 +103,7 @@ pub enum Cmd {
         /// Address to listen on.
         #[arg(long, default_value_t = IpAddr::V4(Ipv4Addr::UNSPECIFIED))]
         bind: IpAddr,
-        /// Must match the sender's --transport.
+        /// Backends to accept; `auto` takes both, since each sender picks its own.
         #[arg(long, value_enum, default_value_t = default_transport())]
         transport: TransportArg,
         /// Exit after one transfer attempt instead of waiting for more.
@@ -115,7 +128,7 @@ pub enum Cmd {
         /// Parallel data streams (1–16).
         #[arg(long, default_value_t = 2, value_parser = clap::value_parser!(u8).range(1..=16))]
         streams: u8,
-        /// Must match the receiver's --transport.
+        /// `auto` picks this device's best backend; the receiver must accept it (its `auto` takes both).
         #[arg(long, value_enum, default_value_t = default_transport())]
         transport: TransportArg,
         /// Seconds to look for devices.
@@ -588,9 +601,11 @@ async fn cmd_receive(data: &Path, a: ReceiveArgs, peer_name: Arc<Mutex<Option<St
         None => Expected::None,
     };
     let ctx = Ctx { id, data: data.to_path_buf(), json: a.json, peer_name };
+    let cannot = |e: transport::TransportError| CliError::Config(format!("Cannot listen on {}: {e}. Is another dfte receive running? Try --port.", a.listen));
     match a.transport {
-        TransportArg::Tcp => receive_with(&TcpTransport::default(), &ctx, &a, &dest, &staging, expected).await,
-        TransportArg::Quic => receive_with(&quic(&ctx.id)?, &ctx, &a, &dest, &staging, expected).await,
+        TransportArg::Auto => receive_on(DualListener::bind(&TcpTransport::default(), &quic(&ctx.id)?, a.listen).await.map_err(cannot)?, "tcp+quic", &ctx, &a, &dest, &staging, expected).await,
+        TransportArg::Tcp => receive_on(TcpTransport::default().listen(a.listen).await.map_err(cannot)?, "tcp", &ctx, &a, &dest, &staging, expected).await,
+        TransportArg::Quic => receive_on(quic(&ctx.id)?.listen(a.listen).await.map_err(cannot)?, "quic", &ctx, &a, &dest, &staging, expected).await,
     }
 }
 
@@ -605,19 +620,18 @@ fn quic(id: &DeviceIdentity) -> Result<QuicTransport, CliError> {
     QuicTransport::new(id, QuicConfig::default()).map_err(|e| CliError::Config(format!("cannot set up QUIC: {e}")))
 }
 
-fn kind_name(t: TransportArg) -> &'static str {
+fn kind_name(t: TransportKind) -> &'static str {
     match t {
-        TransportArg::Tcp => "tcp",
-        TransportArg::Quic => "quic",
+        TransportKind::Tcp => "tcp",
+        TransportKind::Quic => "quic",
     }
 }
 
-async fn receive_with<T: Transport>(t: &T, ctx: &Ctx, a: &ReceiveArgs, dest: &Path, staging: &Path, expected: Expected) -> Result<(), CliError> {
-    let mut listener = t.listen(a.listen).await.map_err(|e| CliError::Config(format!("Cannot listen on {}: {e}. Is another dfte receive running? Try --port.", a.listen)))?;
+async fn receive_on<L: Listener>(mut listener: L, label: &str, ctx: &Ctx, a: &ReceiveArgs, dest: &Path, staging: &Path, expected: Expected) -> Result<(), CliError> {
     let local = listener.local_addr().map_err(|e| CliError::Config(format!("cannot read the listening address: {e}")))?;
     let name = identity::device_name();
     eprintln!("Ready to receive as \"{name}\" ({}).", ctx.id.fingerprint());
-    eprintln!("Listening on {local} ({}). Saving to {}.", kind_name(a.transport), dest.display());
+    eprintln!("Listening on {local} ({label}). Saving to {}.", dest.display());
 
     let discovery = match lan(&a.beacon, &name, local.port()) {
         Ok(d) => match d.start_advertising(&ctx.id).await {
@@ -788,9 +802,9 @@ async fn cmd_send(data: &Path, a: SendArgs, peer_name: Arc<Mutex<Option<String>>
     let (addr, expected, shown) = resolve(&a, &trust).await?;
     *lock(&peer_name) = shown;
     let ctx = Ctx { id, data: data.to_path_buf(), json: a.json, peer_name };
-    match a.transport {
-        TransportArg::Tcp => send_with(&TcpTransport::default(), &ctx, &a, addr, expected, trust).await,
-        TransportArg::Quic => send_with(&quic(&ctx.id)?, &ctx, &a, addr, expected, trust).await,
+    match a.transport.for_send() {
+        TransportKind::Tcp => send_with(&TcpTransport::default(), &ctx, &a, addr, expected, trust).await,
+        TransportKind::Quic => send_with(&quic(&ctx.id)?, &ctx, &a, addr, expected, trust).await,
     }
 }
 
@@ -808,7 +822,7 @@ async fn send_with<T: Transport>(t: &T, ctx: &Ctx, a: &SendArgs, addr: SocketAdd
     opts.common.cancel = Some(cancel.clone());
 
     if !ctx.json {
-        eprintln!("Preparing {} item(s) and connecting to {addr} ({})…", a.paths.len(), kind_name(a.transport));
+        eprintln!("Preparing {} item(s) and connecting to {addr} ({})…", a.paths.len(), kind_name(a.transport.for_send()));
     }
     let started = Instant::now();
     let r = interruptible(send_files(t, addr, &a.paths, &opts), &cancel, &prompting).await;

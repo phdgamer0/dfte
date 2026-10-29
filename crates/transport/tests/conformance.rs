@@ -6,7 +6,7 @@ use crypto::DeviceIdentity;
 use protocol::MsgType;
 use protocol::header::Header;
 use tokio::io::AsyncWriteExt;
-use transport::{Listener, QuicConfig, QuicTransport, TcpTransport, Transport, TransportError};
+use transport::{DualListener, Listener, QuicConfig, QuicTransport, TcpTransport, Transport, TransportError, TransportKind};
 
 fn hdr(t: MsgType, stream: u32, seq: u64, len: usize) -> Header {
     Header::new(t, 0, stream, seq, len as u32)
@@ -97,4 +97,31 @@ async fn quic_invalid_stream_counts() {
     let t = QuicTransport::new(&DeviceIdentity::generate().unwrap(), QuicConfig::default()).unwrap();
     assert!(matches!(t.connect("127.0.0.1:9".parse().unwrap(), 0).await, Err(TransportError::InvalidStreamCount(0))));
     assert!(matches!(t.connect("127.0.0.1:9".parse().unwrap(), 17).await, Err(TransportError::InvalidStreamCount(17))));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn dual_listener_accepts_both_backends_on_one_port() {
+    let id = DeviceIdentity::generate().unwrap();
+    let (tcp, quic) = (TcpTransport::default(), QuicTransport::new(&id, QuicConfig::default()).unwrap());
+    let mut l = DualListener::bind(&tcp, &quic, "127.0.0.1:0".parse().unwrap()).await.unwrap();
+    let addr = l.local_addr().unwrap();
+    // A half-open TCP socket mid-preamble must not hold up the QUIC sender.
+    let _stalled = tokio::net::TcpStream::connect(addr).await.unwrap();
+    let client = QuicTransport::new(&DeviceIdentity::generate().unwrap(), QuicConfig::default()).unwrap();
+    let (c, s) = tokio::join!(client.connect(addr, 2), l.accept());
+    assert_eq!((c.unwrap().kind, s.unwrap().kind), (TransportKind::Quic, TransportKind::Quic));
+    let (c, s) = tokio::join!(tcp.connect(addr, 2), l.accept());
+    assert_eq!((c.unwrap().kind, s.unwrap().kind), (TransportKind::Tcp, TransportKind::Tcp));
+    l.drain().await.unwrap();
+}
+
+#[test]
+fn platform_default_matches_the_os_rule() {
+    let k = TransportKind::platform_default();
+    if cfg!(windows) {
+        assert_eq!(k, TransportKind::Tcp);
+    } else if !cfg!(any(target_os = "linux", target_os = "android")) {
+        assert_eq!(k, TransportKind::Quic);
+    }
+    assert_eq!(k, TransportKind::platform_default(), "probe result is cached");
 }

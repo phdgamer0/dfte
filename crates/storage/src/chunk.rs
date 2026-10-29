@@ -74,7 +74,7 @@ impl ChunkReader {
     /// Open `path` for chunked reading. Missing file → [`StorageError::SourceFileMissing`].
     pub fn open_blocking(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref().to_path_buf();
-        let file = File::open(&path).map_err(|e| missing_or_io(e, &path))?;
+        let file = crate::fileio::open_source(&path).map_err(|e| missing_or_io(e, &path))?;
         let meta = file.metadata()?;
         if !meta.is_file() {
             return Err(StorageError::Io(io::Error::new(io::ErrorKind::InvalidInput, "source is not a regular file")));

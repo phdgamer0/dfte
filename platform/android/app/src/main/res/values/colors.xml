@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Mirrors ui-spec.html tokens; Compose reads Theme.kt, these only paint the window before it draws. -->
+    <color name="bg">#F5F4F1</color>
+    <color name="accent">#5B5BD6</color>
+</resources>

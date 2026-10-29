@@ -52,12 +52,16 @@ fun AppRoot(app: DfteApp, pickFiles: () -> Unit, askPermissions: () -> Unit, all
 
     BackHandler(enabled = nav.stack.size > 1) { nav.pop() }
 
-    // Host a Wi-Fi Direct group only while a screen peers must reach us from is open,
-    // or while a transfer still runs over it.
+    // Wi-Fi Direct is on only while a screen peers must reach us from is open; a
+    // transfer pauses the peer search but keeps the group it runs over.
     val wantsGroup = nav.wantsPeers
     val anyActive = state.jobs.values.any { it.active }
     LaunchedEffect(wantsGroup, anyActive) {
-        if (wantsGroup) engine.hostNearby() else if (!anyActive) engine.stopHosting()
+        when {
+            anyActive -> engine.pauseDiscovery()
+            wantsGroup -> engine.hostNearby()
+            else -> engine.stopHosting()
+        }
     }
 
     fun send(screen: Screen.SendTo, target: Target) {

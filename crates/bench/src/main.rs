@@ -16,7 +16,7 @@
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use clap::{Parser, Subcommand, ValueEnum};
 use dfte_core::{DeviceIdentity, PeerAuth, PeerVerifier, ReceiveOptions, SendOptions, TransferReport, TrustAny, receive, send_files};
@@ -238,12 +238,20 @@ async fn run(cli: Cli) -> Result<(), BoxError> {
                     print_report(&run.receiver);
                 }
                 runs.push(run);
+                // Let the deleted run's discard/writeback finish before the next one.
+                tokio::time::sleep(SETTLE).await;
             }
-            let mut tp: Vec<f64> = runs.iter().map(|r| r.sender.throughput_bytes_per_sec).collect();
-            tp.sort_by(f64::total_cmp);
-            let median = tp[tp.len() / 2];
-            let summary = LoopbackSummary { size, files: paths.len(), streams, plaintext, in_memory, in_flight, recv_buffers, median_throughput_bytes_per_sec: median, runs };
-            emit(cli.json, &summary, || println!("median sender throughput over {} run(s): {:.1} MiB/s", summary.runs.len(), median / MIB))?;
+            let median_of = |f: fn(&LoopbackRun) -> f64| {
+                let mut v: Vec<f64> = runs.iter().map(f).collect();
+                v.sort_by(f64::total_cmp);
+                v[v.len() / 2]
+            };
+            let median = median_of(|r| r.sender.throughput_bytes_per_sec);
+            // End-to-end (received and synced) is the honest headline: the sender's own
+            // rate stops at the last ack, before the receiver's final fsync.
+            let median_e2e = median_of(|r| r.receiver.end_to_end_bytes_per_sec);
+            let summary = LoopbackSummary { size, files: paths.len(), streams, plaintext, in_memory, in_flight, recv_buffers, median_throughput_bytes_per_sec: median, median_end_to_end_bytes_per_sec: median_e2e, runs };
+            emit(cli.json, &summary, || println!("median over {} run(s): end-to-end {:.1} MiB/s, sender {:.1} MiB/s", summary.runs.len(), median_e2e / MIB, median / MIB))?;
         }
     }
     Ok(())
@@ -265,6 +273,7 @@ struct LoopbackSummary {
     in_flight: usize,
     recv_buffers: usize,
     median_throughput_bytes_per_sec: f64,
+    median_end_to_end_bytes_per_sec: f64,
     runs: Vec<LoopbackRun>,
 }
 
@@ -276,6 +285,9 @@ fn emit<T: Serialize>(json: bool, value: &T, human: impl FnOnce()) -> Result<(),
     }
     Ok(())
 }
+
+/// Pause between loopback repetitions (see the loop).
+const SETTLE: Duration = Duration::from_secs(2);
 
 fn tmpfs_dir() -> Result<PathBuf, BoxError> {
     let shm = PathBuf::from("/dev/shm");
@@ -306,7 +318,9 @@ fn generate(dir: &Path, size: u64, files: usize) -> Result<Vec<PathBuf>, BoxErro
             f.write_all(&buf[..n])?;
             left -= n as u64;
         }
-        f.flush()?;
+        // Durable before measuring: otherwise the first run competes with the kernel
+        // writing this data back (seen on the phone's eMMC as 2-4x run-to-run swings).
+        f.into_inner().map_err(std::io::IntoInnerError::into_error)?.sync_all()?;
         out.push(p);
     }
     Ok(out)

@@ -112,6 +112,9 @@ class Engine(private val app: Application) : TransferObserver {
     init {
         manager.setObserver(this)
         wifiDirect.watch(::onLink)
+        // A group or search left over from an earlier process (a crash, a kill) keeps
+        // the radio hopping between channels; nothing here wants one yet.
+        act { wifiDirect.stop() }
     }
 
     // ---- lifecycle -------------------------------------------------------
@@ -151,6 +154,8 @@ class Engine(private val app: Application) : TransferObserver {
     /** A screen peers must reach us from is open: be discoverable over Wi-Fi Direct, if allowed (manual §26: asked in context). */
     fun hostNearby() = act {
         lifecycle.withLock {
+            // A running transfer keeps the radio on its channel (see pauseDiscovery).
+            if (_state.value.jobs.values.any { it.active }) return@withLock
             if (rearm?.isActive == true || !wifiDirect.supported || !wifiDirect.permitted || !wifiDirect.locationReady) return@withLock
             wifiDirect.discoverable()
             if (_state.value.direct == Direct.Off) _state.update { it.copy(direct = Direct.Discoverable) }
@@ -165,6 +170,20 @@ class Engine(private val app: Application) : TransferObserver {
                     }
                 }
             }
+        }
+    }
+
+    /**
+     * A transfer is running: stop searching for peers (keeping any group). Peer
+     * discovery makes the radio leave the data channel to scan; measured on the A30,
+     * a LAN transfer with discovery on ran at 1.3 MiB/s instead of ~8.
+     */
+    fun pauseDiscovery() = act {
+        lifecycle.withLock {
+            if (rearm == null) return@withLock
+            rearm?.cancel()
+            rearm = null
+            wifiDirect.stopDiscovery()
         }
     }
 
@@ -316,7 +335,9 @@ class Engine(private val app: Application) : TransferObserver {
 
     private fun publish(id: String) = scope.launch(Dispatchers.IO) {
         try {
+            val t0 = android.os.SystemClock.elapsedRealtime()
             val moved = Received.publish(app, Received.stagingFor(app, id))
+            Log.i(TAG, "published ${moved.size} item(s) into Downloads in ${android.os.SystemClock.elapsedRealtime() - t0} ms")
             val where = if (moved.size == 1) "Downloads/DFTE/${moved[0].name}" else "Downloads/DFTE"
             upsert(id) { it.copy(savedTo = where) }
         } catch (e: Exception) {

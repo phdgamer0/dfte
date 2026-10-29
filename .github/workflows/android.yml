@@ -1,0 +1,51 @@
+name: Android
+
+# Builds the Android app (manual §4/§40 Phase 7): the Rust core cross-built for
+# arm64, its Kotlin bindings, and a release APK. PRs only when Android or FFI
+# code changes; nightly otherwise, to stay within Actions minutes.
+on:
+  pull_request:
+    paths: ["platform/android/**", "crates/platform-ffi/**", ".github/workflows/android.yml"]
+  schedule:
+    - cron: "30 3 * * *"
+  workflow_dispatch:
+
+defaults:
+  run:
+    shell: bash --noprofile --norc -euo pipefail {0}
+
+env:
+  NDK_VERSION: "30.0.16248370"
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.98.1
+        with:
+          targets: aarch64-linux-android
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: android
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Android SDK packages
+        run: |
+          # `yes` dies of SIGPIPE once sdkmanager exits; that is not a failure.
+          (yes || true) | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null
+          # build-tools 36.0.0 is AGP 9.5's default; compileSdk 37 is platform 37.0.
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;$NDK_VERSION" "platforms;android-37.0" "build-tools;36.0.0" > /dev/null
+          echo "sdk.dir=$ANDROID_HOME" > platform/android/local.properties
+      - name: Build release APK
+        working-directory: platform/android
+        run: ./gradlew assembleRelease --console=plain
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dfte-android-arm64
+          path: platform/android/app/build/outputs/apk/release/app-release.apk
+          retention-days: 14

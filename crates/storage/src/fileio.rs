@@ -6,6 +6,27 @@ use std::fs::File;
 use std::io;
 use std::path::Path;
 
+/// Opens a file chosen for sending. On Linux/Android a path that is (or links
+/// to) `/proc/self/fd/N` duplicates that descriptor instead of reopening it
+/// (see `procfd`); everything else is a plain open.
+pub fn open_source(path: &Path) -> io::Result<File> {
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    if let Some(f) = crate::procfd::dup(path) {
+        return f;
+    }
+    File::open(path)
+}
+
+/// `std::fs::metadata` for a file chosen for sending, through [`open_source`]
+/// when the path is a descriptor link (stat on it would hit the same refusal).
+pub fn source_metadata(path: &Path) -> io::Result<std::fs::Metadata> {
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    if let Some(f) = crate::procfd::dup(path) {
+        return f?.metadata();
+    }
+    std::fs::metadata(path)
+}
+
 /// Read exactly `buf.len()` bytes starting at `offset`, without moving any shared cursor.
 pub fn read_exact_at(file: &File, buf: &mut [u8], offset: u64) -> io::Result<()> {
     #[cfg(unix)]

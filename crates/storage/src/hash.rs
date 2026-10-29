@@ -1,6 +1,5 @@
 //! BLAKE3 chunk and whole-file hashing (manual §19/§20).
 
-use std::fs::File;
 use std::io::{self, Read};
 use std::path::Path;
 
@@ -17,7 +16,7 @@ pub fn hash_chunk(data: &[u8]) -> [u8; 32] {
 /// Streaming whole-file BLAKE3. Missing file → [`StorageError::SourceFileMissing`].
 pub fn hash_file_blocking(path: impl AsRef<Path>) -> Result<[u8; 32]> {
     let path = path.as_ref();
-    let file = File::open(path).map_err(|e| if e.kind() == io::ErrorKind::NotFound { StorageError::SourceFileMissing { path: path.to_path_buf() } } else { StorageError::Io(e) })?;
+    let file = crate::fileio::open_source(path).map_err(|e| if e.kind() == io::ErrorKind::NotFound { StorageError::SourceFileMissing { path: path.to_path_buf() } } else { StorageError::Io(e) })?;
     hash_reader_blocking(file)
 }
 

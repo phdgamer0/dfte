@@ -276,8 +276,8 @@ impl TransferManager {
 
     /// Makes this device discoverable and starts reporting peers through
     /// [`TransferObserver::on_peer_found`]/[`on_peer_lost`](TransferObserver::on_peer_lost).
-    /// Desktop default (no backend configured): LAN beacons advertising the
-    /// first listening port, so call [`listen`](Self::listen) first.
+    /// Default without a configured backend (desktop and, for now, Android): LAN
+    /// beacons advertising the first listening port, so call [`listen`](Self::listen) first.
     pub async fn start_scan(&self) -> Result<()> {
         let s = Arc::clone(&self.shared);
         self.run(async move { s.start_scan().await }).await
@@ -826,7 +826,10 @@ impl Shared {
         if let Some(d) = slot.as_ref() {
             return Ok(Arc::clone(d));
         }
-        if cfg!(any(target_os = "android", target_os = "ios")) {
+        // Android uses LAN beacons until its Wi-Fi Direct backend lands (manual §6);
+        // the app holds a MulticastLock so beacons arrive. iOS needs the multicast
+        // entitlement, so it always brings a platform backend.
+        if cfg!(target_os = "ios") {
             return Err(EngineError::Discovery("no platform discovery backend configured".into()));
         }
         let port = lock(&self.listeners).first().map(|l| l.addr.port()).ok_or_else(|| EngineError::InvalidInput("listen before scanning: LAN beacons advertise the listening port".into()))?;

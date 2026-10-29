@@ -77,7 +77,7 @@ fn collect_blocking(paths: &[PathBuf]) -> Result<Vec<Entry>> {
     let mut out = Vec::new();
     for p in paths {
         // Top-level selections are followed if they are symlinks: the user picked them.
-        let meta = std::fs::metadata(p).map_err(|e| if e.kind() == std::io::ErrorKind::NotFound { EngineError::SourceFileMissing { path: p.clone() } } else { e.into() })?;
+        let meta = storage::source_metadata(p).map_err(|e| if e.kind() == std::io::ErrorKind::NotFound { EngineError::SourceFileMissing { path: p.clone() } } else { e.into() })?;
         let name = utf8_name(p)?;
         if meta.is_dir() {
             walk_blocking(p, &name, &mut out)?;
@@ -107,7 +107,7 @@ pub(crate) fn build_source_blocking(paths: &[PathBuf], threads: usize, cache: Op
             sources.push(SourceFile { path: None, size: 0, modified: None, pieces: Vec::new() });
             continue;
         };
-        let meta = std::fs::metadata(&path)?;
+        let meta = storage::source_metadata(&path)?;
         let size = meta.len();
         // `modified()` is unsupported on some platforms; then only size guards changes.
         let modified = meta.modified().ok();
@@ -177,7 +177,7 @@ impl Readers {
         let path = f.path.as_ref().ok_or_else(|| EngineError::Internal("chunk read from a directory entry".into()))?;
         let reader = ChunkReader::open_blocking(path)?;
         // Same platform caveat as in `build_source_blocking`: compared as Option.
-        let modified = std::fs::metadata(path)?.modified().ok();
+        let modified = storage::source_metadata(path)?.modified().ok();
         if reader.size() != f.size || modified != f.modified {
             return Err(EngineError::SourceFileChanged { path: path.clone() });
         }

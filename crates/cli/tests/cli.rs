@@ -366,8 +366,11 @@ fn sigint_then_rerun_resumes() {
     // before the SIGINT lands and the sender exits 0 (seen on ubuntu-latest).
     let mut c = a.cmd();
     c.env("DFTE_TEST_CHUNK_DELAY_MS", "50").args(["--json", "send"]).arg(&f).args(["--to", &format!("127.0.0.1:{port}"), "--transport", "tcp"]).args(BEACON).args(args);
-    let mut s = Proc::spawn(c);
-    s.wait_for("Sending ");
+    let s = Proc::spawn(c);
+    // Interrupt only once the receiver has confirmed a chunk: its first progress
+    // line is printed on the first one. The sender's own first line can come
+    // before any chunk lands, and then there is nothing to resume (seen on macOS).
+    r.wait_for("Receiving ");
     s.interrupt();
     let (ss, _, serr) = s.finish();
     assert_code(ss, 130, &serr);

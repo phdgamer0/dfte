@@ -313,6 +313,18 @@ async fn one_listener_serves_tcp_and_quic_senders() {
     rx_node.m.shutdown().await.unwrap();
 }
 
+/// Beacon targets need the built-in LAN backend, which advertises the listening port.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn beacon_targets_need_a_listener_and_a_local_address() {
+    let n = trusting(TransportKind::Tcp, "phone", None);
+    let target: SocketAddr = "192.168.49.1:47820".parse().unwrap();
+    assert!(matches!(n.m.add_beacon_target(target), Err(EngineError::InvalidInput(_))));
+    n.listen().await;
+    n.m.add_beacon_target(target).unwrap();
+    assert!(n.m.add_beacon_target("8.8.8.8:47820".parse().unwrap()).is_err());
+    n.m.shutdown().await.unwrap();
+}
+
 /// Polls snapshots until the job has moved at least `bytes`.
 async fn wait_bytes(m: &TransferManager, id: &str, bytes: u64) -> Transfer {
     let deadline = Instant::now() + WAIT;

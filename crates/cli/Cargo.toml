@@ -35,6 +35,9 @@ tracing-subscriber.workspace = true
 zeroize.workspace = true
 qrcode = { workspace = true }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+discovery = { workspace = true, features = ["linux-nm"] }
+
 [target.'cfg(unix)'.dependencies]
 rustix = { workspace = true, features = ["fs", "process", "system"] }
 

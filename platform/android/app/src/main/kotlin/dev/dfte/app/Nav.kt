@@ -39,4 +39,13 @@ class Nav {
     fun home() {
         while (stack.size > 1) pop()
     }
+
+    /** Back to the Receive screen if it is in the stack (a receiver stays ready for the next file), else home. */
+    fun doneReceiving() {
+        if (Screen.Receive !in stack) return home()
+        while (top != Screen.Receive) pop()
+    }
+
+    /** A Send or Receive screen is open somewhere in the stack, so nearby devices should find us. */
+    val wantsPeers: Boolean get() = stack.any { it == Screen.Receive || it is Screen.SendTo }
 }

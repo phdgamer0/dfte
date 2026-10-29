@@ -8,6 +8,12 @@
 //! Received beacons go through a bounded, rate-limited [`PeerTable`]. After a Wi-Fi Direct
 //! group forms without in-band IP allocation, running this backend on the new interface is
 //! also how the two ends learn each other's address and engine port.
+//!
+//! Every newly verified peer also becomes a unicast destination ("reply to whoever found
+//! us"), capped at [`MAX_LEARNED_TARGETS`]. Multicast leaves through the default route
+//! only, so on a phone hosting a Wi-Fi Direct group while also on home Wi-Fi, a laptop in
+//! the group would otherwise never hear it: the laptop beacons to the group owner's
+//! address, and the phone answers it directly.
 
 pub mod beacon;
 pub mod table;
@@ -30,6 +36,8 @@ pub use table::{DropReason, Ingest, LanPeer, PeerTable, TableConfig};
 
 /// Default beacon UDP port.
 pub const DEFAULT_BEACON_PORT: u16 = 47_820;
+/// Most unicast destinations learned from received beacons (oldest replaced first).
+pub const MAX_LEARNED_TARGETS: usize = 16;
 /// Default multicast group, in the IPv4 organization-local scope (239.255.0.0/16, RFC 2365).
 pub const DEFAULT_MULTICAST_GROUP: Ipv4Addr = Ipv4Addr::new(239, 255, 70, 84);
 
@@ -98,6 +106,8 @@ struct Shared {
     tasks: Mutex<Tasks>,
     /// Multicast group (if any) plus unicast targets; read by the announce task every tick.
     destinations: Mutex<Vec<SocketAddr>>,
+    /// Beacon sources of verified peers, also announced to (see the module docs).
+    learned: Mutex<std::collections::VecDeque<SocketAddr>>,
     /// Datagrams dropped by the peer table (malformed, rate-limited, replayed, forged...).
     dropped: AtomicU64,
 }
@@ -115,7 +125,7 @@ impl LanDiscovery {
         let table = PeerTable::new(config.table, Instant::now());
         let mut destinations: Vec<SocketAddr> = config.multicast_group.map(|g| SocketAddr::from((g, config.multicast_port))).into_iter().collect();
         destinations.extend(config.unicast_targets.iter().copied());
-        let shared = Shared { table: Mutex::new(table), socket: tokio::sync::Mutex::new(None), tasks: Mutex::new(Tasks::default()), destinations: Mutex::new(destinations), dropped: AtomicU64::new(0) };
+        let shared = Shared { table: Mutex::new(table), socket: tokio::sync::Mutex::new(None), tasks: Mutex::new(Tasks::default()), destinations: Mutex::new(destinations), learned: Mutex::new(std::collections::VecDeque::new()), dropped: AtomicU64::new(0) };
         Ok(Self { config: Arc::new(config), shared: Arc::new(shared) })
     }
 
@@ -238,6 +248,11 @@ impl PeerDiscovery for LanDiscovery {
                 }
                 let n = signer.encode_into(&name, port, wall_ms(), nonce, &mut buf);
                 dests.clone_from(&lock(&shared.destinations));
+                for t in lock(&shared.learned).iter() {
+                    if !dests.contains(t) {
+                        dests.push(*t);
+                    }
+                }
                 for d in &dests {
                     if let Err(e) = socket.send_to(&buf[..n], d).await {
                         tracing::debug!(error = %e, dest = %d, "beacon send failed");
@@ -277,8 +292,24 @@ impl PeerDiscovery for LanDiscovery {
             t.abort();
         }
         *self.shared.socket.lock().await = None;
+        lock(&self.shared.learned).clear();
         Ok(())
     }
+}
+
+/// Remembers a verified peer's beacon address as a unicast destination.
+fn learn(shared: &Shared, src: SocketAddr) {
+    if !is_local_scope(src.ip()) || lock(&shared.destinations).contains(&src) {
+        return;
+    }
+    let mut l = lock(&shared.learned);
+    if l.contains(&src) {
+        return;
+    }
+    if l.len() == MAX_LEARNED_TARGETS {
+        l.pop_front();
+    }
+    l.push_back(src);
 }
 
 async fn receive_loop(socket: Arc<UdpSocket>, shared: Arc<Shared>, tx: mpsc::Sender<DiscoveryEvent>, ttl: Duration) {
@@ -295,7 +326,10 @@ async fn receive_loop(socket: Arc<UdpSocket>, shared: Arc<Shared>, tx: mpsc::Sen
         let events: Vec<DiscoveryEvent> = tokio::select! {
             r = socket.recv_from(&mut buf) => match r {
                 Ok((n, src)) => match lock(&shared.table).ingest(src, &buf[..n], Instant::now(), wall_ms()) {
-                    Ingest::Found(p) => vec![DiscoveryEvent::PeerFound(p)],
+                    Ingest::Found(p) => {
+                        learn(&shared, src);
+                        vec![DiscoveryEvent::PeerFound(p)]
+                    }
                     Ingest::Refreshed => Vec::new(),
                     Ingest::Dropped(reason) => {
                         // Dropping hostile/malformed datagrams is the point; count and log them.
@@ -383,6 +417,37 @@ mod tests {
 
         a.stop().await.unwrap();
         b.stop().await.unwrap();
+    }
+
+    /// Only B knows A's address; A learns B's from B's beacon and answers it, so both
+    /// find each other (the phone-hosts-a-Wi-Fi-Direct-group case).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn one_sided_target_is_answered() {
+        let (id_a, id_b) = (DeviceIdentity::generate().unwrap(), DeviceIdentity::generate().unwrap());
+        let a = LanDiscovery::new(loopback_config("A", 5011)).unwrap();
+        let b = LanDiscovery::new(loopback_config("B", 5012)).unwrap();
+        b.add_unicast_target(a.local_addr().await.unwrap()).unwrap();
+        let mut sa = a.start_scanning().await.unwrap();
+        let mut sb = b.start_scanning().await.unwrap();
+        a.start_advertising(&id_a).await.unwrap();
+        b.start_advertising(&id_b).await.unwrap();
+        assert_eq!(wait_found(&mut sa).await.display_name, "B");
+        assert_eq!(wait_found(&mut sb).await.display_name, "A");
+        a.stop().await.unwrap();
+        b.stop().await.unwrap();
+    }
+
+    #[test]
+    fn learned_targets_are_bounded_and_local_only() {
+        let a = LanDiscovery::new(loopback_config("A", 1)).unwrap();
+        learn(&a.shared, "8.8.8.8:47820".parse().unwrap());
+        for i in 0..40u16 {
+            learn(&a.shared, SocketAddr::from((Ipv4Addr::new(192, 168, 49, 2), 1000 + i)));
+        }
+        learn(&a.shared, SocketAddr::from((Ipv4Addr::new(192, 168, 49, 2), 1039)));
+        let l = lock(&a.shared.learned);
+        assert_eq!(l.len(), MAX_LEARNED_TARGETS);
+        assert!(l.iter().all(|t| t.ip().is_ipv4() && t.port() >= 1024));
     }
 
     #[tokio::test]

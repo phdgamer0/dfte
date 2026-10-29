@@ -32,12 +32,16 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private val wifiDirectPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) app.engine.hostNearby() else app.engine.notify("Wi-Fi Direct stays off. Devices on the same Wi-Fi can still connect.")
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         setContent {
             DfteTheme {
-                AppRoot(app, pickFiles = { picker.launch(arrayOf("*/*")) }, askPermissions = ::askPermissions)
+                AppRoot(app, pickFiles = { picker.launch(arrayOf("*/*")) }, askPermissions = ::askPermissions, allowWifiDirect = { wifiDirectPermission.launch(app.engine.wifiDirect.permission) })
             }
         }
         if (savedInstanceState == null) handleShare(intent)
@@ -51,6 +55,8 @@ class MainActivity : ComponentActivity() {
     override fun onStart() {
         super.onStart()
         app.engine.foreground()
+        // Back from the permission or Location settings with a Send/Receive screen open.
+        if (app.nav.wantsPeers) app.engine.hostNearby()
     }
 
     override fun onStop() {

@@ -1,0 +1,483 @@
+.TH DFTE 1 2026-10-30 "dfte 0.1.0" "User Commands"
+.nh
+.SH NAME
+dfte \- send files directly to a nearby device, without a server
+.SH SYNOPSIS
+.B dfte
+.RI [ options ]
+.B id
+.br
+.B dfte
+.RI [ options ]
+.B receive
+.RB [ \-\-dir
+.IR dir ]
+.RB [ \-\-once ]
+.RB [ \-\-accept\-from
+.IR fingerprint ]
+.RI [ more\ options ]
+.br
+.B dfte
+.RI [ options ]
+.B send
+.RB [ \-\-to
+.IR device ]
+.RB [ \-\-expect
+.IR fingerprint ]
+.RI [ more\ options ]
+.IR path ...
+.br
+.B dfte
+.RI [ options ]
+.B peers
+.RB [ \-\-timeout
+.IR seconds ]
+.br
+.B dfte
+.RI [ options ]
+.B trust
+.BR list | add | remove
+.RI [ args ]
+.br
+.B dfte
+.RI [ options ]
+.B resumable
+.RB [ \-\-discard
+.IR id ]
+.br
+.B dfte
+.RI [ options ]
+.B qr
+.RB [ \-\-ssid
+.IR ssid ]
+.RB [ \-\-psk
+.IR psk ]
+.RB [ \-\-ip
+.IR ip ]
+.RB [ \-\-port
+.IR port ]
+.SH DESCRIPTION
+.B dfte
+copies files and folders from one device to another over a local network or a
+Wi\-Fi Direct link.
+No server, account or Internet connection is involved.
+The other device can run
+.BR dfte ,
+.BR dfte\-gtk (1)
+or the DFTE Android app.
+.PP
+Connections are encrypted and authenticated.
+The first time two devices connect, both show the other's fingerprint and a
+six\-digit security code.
+Accept only if both screens show the same code.
+A device you mark as trusted, or whose fingerprint you pass with
+.BR \-\-to ,
+.B \-\-expect
+or
+.BR \-\-accept\-from ,
+skips that prompt.
+There is no option to skip it otherwise.
+When standard input is not a terminal, the prompt cannot be shown and the
+peer is rejected unless it is trusted or pinned.
+.PP
+Devices on the same network find each other with signed UDP beacons on port
+47820 (multicast group 239.255.70.84, plus any
+.B \-\-beacon\-to
+addresses).
+Received data is written to a staging directory first and only moved to the
+destination once its BLAKE3 hash matches the sender's.
+An interrupted transfer resumes when the sender sends the same files again.
+.PP
+Progress and prompts go to standard error.
+Results go to standard output.
+.SH OPTIONS
+These work with every command.
+.TP
+.BR \-v ", " \-\-verbose
+More log output on standard error: once for info, twice for debug, three times
+for trace.
+Logs never contain keys or file contents.
+.TP
+.B \-\-json
+Machine\-readable output on standard output.
+Transfer reports are printed as one JSON object per line.
+Errors become a JSON object with
+.BR error ,
+.B exit_code
+and
+.B message
+fields.
+.TP
+.BR \-h ", " \-\-help
+Print help.
+.TP
+.BR \-V ", " \-\-version
+Print the version.
+.SH COMMANDS
+.SS id
+Show this device's name and fingerprint, and where the key file is.
+The identity is created the first time any command needs it.
+.SS receive
+Wait for files from another device.
+By default
+.B dfte receive
+keeps waiting for further transfers after each one; stop it with Ctrl\-C.
+.TP
+.BI \-\-dir " dir"
+Where finished files go.
+Default: your Downloads folder (see
+.BR ENVIRONMENT ).
+.TP
+.BI \-\-port " port"
+Port to listen on, 0 for any free port.
+Default: 47821.
+.TP
+.BI \-\-bind " address"
+Address to listen on.
+Default: 0.0.0.0.
+.TP
+.BI \-\-transport " auto|tcp|quic"
+Backends to accept.
+.B auto
+(the default) listens on TCP and QUIC on the same port, since each sender
+picks its own.
+.TP
+.B \-\-once
+Exit after one transfer attempt instead of waiting for more.
+.TP
+.BI \-\-accept\-from " fingerprint"
+Accept only this device, without the code prompt.
+Get its fingerprint from its own screen.
+.TP
+.BI \-\-beacon\-bind " address:port"
+Local address for discovery beacons.
+Default: 0.0.0.0:47820.
+.TP
+.BI \-\-beacon\-to " ip:port"
+Also exchange beacons with this address on the local network.
+Repeatable.
+Use it on networks that drop multicast.
+.TP
+.B \-\-no\-multicast
+Don't use multicast discovery; only the
+.B \-\-beacon\-to
+targets.
+.TP
+.BI \-\-wifi\-direct " device"
+First join a Wi\-Fi Direct group with this device, given by its Wi\-Fi Direct
+name or P2P address.
+Linux only, through NetworkManager; no root needed.
+See
+.BR NOTES .
+.SS send
+Send files or folders to another device.
+Folders are sent with their contents; symbolic links inside them are skipped.
+.TP
+.BI \-\-to " device"
+The receiving device: a fingerprint, the name of a trusted device, the name
+it advertises, or
+.IR ip : port .
+Without it,
+.B dfte
+looks for devices and asks which one to use, which needs a terminal.
+A fingerprint or trusted name also pins the peer, so no code prompt is shown.
+.TP
+.BI \-\-expect " fingerprint"
+With
+.BI \-\-to " ip:port"\c
+: the receiver's fingerprint, read from its screen or QR code.
+Skips the code prompt; a different key is rejected.
+.TP
+.BI \-\-streams " n"
+Parallel data streams, 1 to 16.
+Default: 2.
+.TP
+.BI \-\-transport " auto|tcp|quic"
+.B auto
+(the default) picks this device's best backend: TCP if the kernel has no UDP
+segmentation offload (Linux before 4.18), QUIC otherwise.
+The receiver must accept the chosen backend; its
+.B auto
+takes both.
+.TP
+.BI \-\-scan\-timeout " seconds"
+How long to look for devices.
+Default: 5.
+.TP
+.BI \-\-beacon\-bind " address:port"
+As for
+.BR receive .
+.TP
+.BI \-\-beacon\-to " ip:port"
+As for
+.BR receive .
+.TP
+.B \-\-no\-multicast
+As for
+.BR receive .
+.TP
+.BI \-\-wifi\-direct " device"
+As for
+.BR receive .
+When the other device ends up owning the group and
+.B \-\-to
+is not an address, the files go to the group owner on port 47821.
+.SS peers
+List devices nearby that are ready to receive, with their fingerprints and
+addresses.
+.TP
+.BI \-\-timeout " seconds"
+How long to listen.
+Default: 5.
+.PP
+.BR \-\-beacon\-bind ,
+.BR \-\-beacon\-to ,
+.B \-\-no\-multicast
+and
+.B \-\-wifi\-direct
+work as for
+.BR receive .
+.SS trust
+Manage trusted devices.
+A trusted device skips the code comparison as long as its key stays the same.
+.TP
+.B trust list
+List trusted devices.
+.TP
+.BI "trust add " "fingerprint name"
+Trust a device whose fingerprint you compared on its own screen.
+.TP
+.BI "trust remove " who
+Stop trusting a device, given by fingerprint or name.
+The code is asked again next time.
+.PP
+Answering
+.B a
+at the code prompt also adds the device.
+.SS resumable
+List unfinished incoming transfers: their id, how much has arrived, and the
+first file names.
+They continue on their own when the sender sends the same files again.
+Matching is by path, size and content hash, so the sender may use a new
+command line.
+.TP
+.BI \-\-discard " id"
+Delete the partial data of this transfer.
+.SS qr
+Print the QR payload an iPhone would scan to join this device's hotspot.
+This is a preview:
+.B dfte
+does not start a hotspot (that needs root, and is not implemented), and there
+is no iPhone app yet.
+The payload contains the passphrase, so only show it to the person you are
+pairing with.
+.TP
+.BI \-\-ssid " ssid"
+Hotspot name.
+Generated if omitted.
+.TP
+.BI \-\-psk " psk"
+Hotspot passphrase, 8 to 63 characters.
+Generated if omitted.
+.TP
+.BI \-\-ip " ip"
+This device's address on its hotspot.
+Default: 192.168.50.1.
+.TP
+.BI \-\-port " port"
+Engine port the iPhone connects to.
+Default: 47821.
+.SH EXIT STATUS
+.TP 5
+.B 0
+Success.
+.TP 5
+.B 1
+Unexpected error.
+.TP 5
+.B 2
+Usage error.
+.TP 5
+.B 3
+Connection lost.
+.TP 5
+.B 4
+Security check failed.
+.TP 5
+.B 5
+Declined by the other device.
+.TP 5
+.B 6
+Not enough space.
+.TP 5
+.B 7
+Source file problem.
+.TP 5
+.B 8
+Integrity check failed.
+.TP 5
+.B 9
+Incompatible app version.
+.TP 5
+.B 10
+The other device broke the protocol.
+.TP 5
+.B 11
+Identity or configuration problem.
+.TP 5
+.B 12
+Device not found.
+.TP 5
+.B 130
+Interrupted; resume state was kept.
+.SH ENVIRONMENT
+.TP
+.B DFTE_DEVICE_NAME
+Name shown to other devices.
+Default: the host name.
+The name is not authenticated; other devices should rely on the fingerprint.
+.TP
+.B XDG_DATA_HOME
+Base for the state directory, see
+.BR FILES .
+Default:
+.IR ~/.local/share .
+.TP
+.B XDG_CACHE_HOME
+Base for the sender's hash cache.
+Default:
+.IR ~/.cache .
+.TP
+.B XDG_DOWNLOAD_DIR
+Default destination for received files.
+If unset,
+.B dfte
+reads it from
+.IR $XDG_CONFIG_HOME/user\-dirs.dirs ,
+and falls back to
+.IR ~/Downloads .
+.TP
+.B XDG_CONFIG_HOME
+Where
+.I user\-dirs.dirs
+is looked up.
+Default:
+.IR ~/.config .
+.TP
+.B HOME
+Used for the defaults above.
+.TP
+.B RUST_LOG
+Log filter in
+.B tracing\-subscriber
+syntax, for example
+.BR debug " or " dfte_core=trace .
+Overrides
+.BR \-v .
+.PP
+Relative or empty values of the
+.B XDG_*
+variables are ignored, as the XDG Base Directory specification requires.
+.SH FILES
+.TP
+.I $XDG_DATA_HOME/dfte/
+State directory, mode 0700.
+Shared with
+.BR dfte\-gtk (1),
+so both are the same device.
+.TP
+.I $XDG_DATA_HOME/dfte/identity.key
+This device's Ed25519 secret key, mode 0600.
+.B dfte
+refuses to use it if other users can read it.
+Deleting it gives the device a new identity, and every other device will ask
+for a code comparison again.
+.TP
+.I $XDG_DATA_HOME/dfte/trusted.json
+Trusted devices, mode 0600.
+.TP
+.I $XDG_DATA_HOME/dfte/staging/
+Partial downloads
+.RI ( *.part )
+and their resume state
+.RI ( *.resume.json ).
+.TP
+.I $XDG_CACHE_HOME/dfte/hashes/
+Sender's cache of file hashes, so unchanged files are not read twice.
+Safe to delete.
+.SH EXAMPLES
+Receive into the Downloads folder and wait for transfers:
+.PP
+.RS
+.EX
+dfte receive
+.EE
+.RE
+.PP
+Send a file and a folder, choosing the receiver from a menu:
+.PP
+.RS
+.EX
+dfte send report.pdf photos/
+.EE
+.RE
+.PP
+Send to a known address, checking the receiver's fingerprint instead of
+comparing codes:
+.PP
+.RS
+.EX
+dfte send \-\-to 192.168.1.20:47821 \e
+    \-\-expect 8bee\-594a\-310a\-934b\-0f81\-3b14 big.iso
+.EE
+.RE
+.PP
+Receive one transfer from a pinned device, for a script:
+.PP
+.RS
+.EX
+dfte receive \-\-once \-\-accept\-from 8bee\-594a\-310a\-934b\-0f81\-3b14 \e
+    \-\-dir /srv/incoming \-\-json
+.EE
+.RE
+.PP
+Send to a phone over Wi\-Fi Direct, with DFTE open on the phone's Send or
+Receive screen:
+.PP
+.RS
+.EX
+dfte send \-\-wifi\-direct "Galaxy A30" holiday.mp4
+.EE
+.RE
+.PP
+On a network that drops multicast, point both sides at each other:
+.PP
+.RS
+.EX
+dfte receive \-\-beacon\-to 192.168.1.30:47820
+dfte send \-\-beacon\-to 192.168.1.20:47820 notes.txt
+.EE
+.RE
+.SH NOTES
+.B \-\-wifi\-direct
+uses NetworkManager's Wi\-Fi P2P support, which only starts connections.
+The other device must be waiting for one: on Android, DFTE's Send or Receive
+screen.
+Two machines that both rely on NetworkManager are not expected to reach each
+other this way (untested).
+If negotiation makes this machine the group owner, NetworkManager needs
+.B dnsmasq
+installed to give the other device an address.
+A Wi\-Fi Direct client interface left behind by a crash can be cleared with
+.BR "nmcli radio wifi off && nmcli radio wifi on" .
+.PP
+The identity key is stored as a plain file, not in the desktop keyring.
+.SH SEE ALSO
+.BR dfte\-gtk (1),
+.BR nmcli (1)
+.PP
+The project's
+.IR docs/security.md ,
+.I docs/wifi\-direct.md
+and
+.IR docs/protocol.md .

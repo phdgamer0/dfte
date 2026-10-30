@@ -6,4 +6,4 @@
 *.py
 *.sh
 *.test
-*.md
+/CLAUDE.md

@@ -1,0 +1,200 @@
+.TH DFTE\-GTK 1 2026-10-30 "dfte-gtk 0.1.0" "User Commands"
+.SH NAME
+dfte\-gtk \- desktop app for sending files directly to a nearby device
+.SH SYNOPSIS
+.B dfte\-gtk
+.RB [ \-\-page
+.IR page ]
+.RI [ file ...]
+.br
+.B dfte\-gtk
+.BR \-h | \-\-help
+.br
+.B dfte\-gtk
+.BR \-V | \-\-version
+.SH DESCRIPTION
+.B dfte\-gtk
+is the GTK 4 and libadwaita front end of DFTE for Linux desktops.
+It sends files and folders straight to another device on the same network, or
+to an Android phone over Wi\-Fi Direct, with no server, account or Internet
+connection.
+The other device can run
+.BR dfte\-gtk ,
+.BR dfte (1)
+or the DFTE Android app.
+.PP
+While the window is open the computer is ready to receive: it listens on port
+47821 (any free port if that one is taken) and announces itself on the local
+network.
+Incoming transfers are offered in a dialog first.
+.PP
+The window has five pages:
+.TP
+.B Send
+Pick files or a folder, or drop them anywhere on the window, then choose a
+device found nearby or type an address such as 192.168.1.20:47821.
+.TP
+.B Receive
+This computer's name and the addresses it listens on.
+The Wi\-Fi Direct box connects to a phone by its Wi\-Fi Direct name; see
+.BR NOTES .
+.TP
+.B Activity
+Running and finished transfers.
+.TP
+.B Devices
+Trusted devices.
+Removing one makes the next connection ask for the code again.
+.TP
+.B Settings
+Device name, fingerprint and the Downloads folder.
+.PP
+The first time two devices connect, a dialog shows the other device's name,
+fingerprint and a six\-digit code.
+Choose
+.B Codes match
+only if the other device shows the same six digits.
+Tick
+.B Trust this device
+to skip the comparison next time.
+There is no way to skip it on a first connection.
+.PP
+Only one instance runs per user session (application id
+.BR dev.dfte.Dfte ).
+Starting the program again brings the existing window forward; files and
+.B \-\-page
+given to that second launch are ignored.
+.SH OPTIONS
+.TP
+.BI \-\-page " page"
+Open on this page:
+.BR send ,
+.BR receive ,
+.BR activity ,
+.B devices
+or
+.BR settings .
+The default is
+.BR send .
+.TP
+.IR file ...
+Files or folders to send.
+They are preselected on the Send page, which suits an "Open with" entry in a
+file manager.
+.TP
+.BR \-h ", " \-\-help
+Print a usage summary and exit without opening a window.
+.TP
+.BR \-V ", " \-\-version
+Print the version and exit.
+.PP
+Other options starting with
+.B \-\-
+are ignored.
+.SH ENVIRONMENT
+.TP
+.B DFTE_DEVICE_NAME
+Name shown to other devices.
+Default: the host name.
+.TP
+.B DFTE_LOG
+Log filter in
+.B tracing\-subscriber
+syntax, for example
+.B info
+or
+.BR dfte_core=debug .
+Default:
+.BR warn .
+Logs go to standard error and never contain keys or file contents.
+.TP
+.B XDG_DATA_HOME
+Base for the state directory, see
+.BR FILES .
+Default:
+.IR ~/.local/share .
+.TP
+.B XDG_DOWNLOAD_DIR
+Where received files go.
+If unset, it is read from
+.IR $XDG_CONFIG_HOME/user\-dirs.dirs ,
+falling back to
+.IR ~/Downloads .
+.TP
+.B XDG_CONFIG_HOME
+Where
+.I user\-dirs.dirs
+is looked up.
+Default:
+.IR ~/.config .
+.PP
+The app follows the system's light or dark setting.
+.SH FILES
+.TP
+.I $XDG_DATA_HOME/dfte/
+State directory, shared with
+.BR dfte (1):
+.I identity.key
+(the device's secret key, mode 0600),
+.I trusted.json
+(trusted devices) and
+.I staging/
+(partial downloads and resume state).
+The two programs are the same device to everyone else.
+.TP
+.I $XDG_DATA_HOME/dfte/hashes/
+Sender's cache of file hashes.
+Safe to delete.
+Note that
+.BR dfte (1)
+keeps its own copy under
+.I $XDG_CACHE_HOME/dfte/hashes/
+instead.
+.SH EXIT STATUS
+0, including when the engine could not start.
+In that case (for example, an unreadable identity key) the app shows the
+reason in a dialog and quits when it is dismissed, so check the dialog rather
+than the exit status.
+.SH EXAMPLES
+Open on the Receive page:
+.PP
+.RS
+.EX
+dfte\-gtk \-\-page receive
+.EE
+.RE
+.PP
+Start with two items ready to send:
+.PP
+.RS
+.EX
+dfte\-gtk ~/Videos/holiday.mp4 ~/Pictures/trip
+.EE
+.RE
+.PP
+Run with debug logging from the engine:
+.PP
+.RS
+.EX
+DFTE_LOG=dfte_core=debug dfte\-gtk
+.EE
+.RE
+.SH NOTES
+Wi\-Fi Direct goes through NetworkManager and needs no root.
+The phone must have DFTE open on its Send or Receive screen, and on Android 12
+or older its Location switch must be on.
+If this computer ends up owning the group, NetworkManager needs
+.B dnsmasq
+installed to give the phone an address.
+.PP
+There is no desktop entry or package yet; run the binary from the build
+directory or copy it somewhere on your
+.BR PATH .
+.SH SEE ALSO
+.BR dfte (1),
+.BR nmcli (1)
+.PP
+The project's
+.I docs/wifi\-direct.md
+and
+.IR docs/security.md .

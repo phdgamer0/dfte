@@ -1,0 +1,73 @@
+# Copyright (c) 2026 Yazdan Samari. All rights reserved except as granted by LICENSE.
+# SPDX-License-Identifier: PolyForm-Shield-1.0.0
+
+# Code scanning for the Kotlin app. CodeQL has to watch the Kotlin compiler run,
+# so this does the real build: the Rust library (ci-release, for speed) and its
+# uniffi bindings first, then the app's Kotlin compile with the Gradle daemon off
+# (CodeQL can't trace into a daemon started earlier).
+name: CodeQL (Android)
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    paths: ["platform/android/**", "crates/platform-ffi/**", ".github/workflows/codeql-android.yml"]
+  schedule:
+    - cron: "23 4 * * 1"
+  workflow_dispatch:
+
+defaults:
+  run:
+    shell: bash --noprofile --norc -euo pipefail {0}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  security-events: write
+
+env:
+  NDK_VERSION: "30.0.16248370"
+
+jobs:
+  analyze:
+    name: analyze (java-kotlin)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.98.1
+        with:
+          targets: aarch64-linux-android
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: android
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Android SDK packages
+        run: |
+          # `yes` dies of SIGPIPE once sdkmanager exits; that is not a failure.
+          (yes || true) | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null
+          # build-tools 36.0.0 is AGP 9.5's default; compileSdk 37 is platform 37.0.
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;$NDK_VERSION" "platforms;android-37.0" "build-tools;36.0.0" > /dev/null
+          echo "sdk.dir=$ANDROID_HOME" > platform/android/local.properties
+      # Everything Gradle needs before Kotlin compiles (Rust library, bindings),
+      # outside the traced build so CodeQL only sees the app's own compile.
+      - name: Rust library and bindings
+        working-directory: platform/android
+        run: ./gradlew --no-daemon --console=plain -PdfteRustProfile=ci-release copyRustLib uniffiBindings
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: java-kotlin
+          build-mode: manual
+      - name: Compile the app (traced)
+        working-directory: platform/android
+        run: ./gradlew --no-daemon --console=plain -PdfteRustProfile=ci-release compileReleaseKotlin
+      - uses: github/codeql-action/analyze@v3
+        with:
+          category: /language:java-kotlin

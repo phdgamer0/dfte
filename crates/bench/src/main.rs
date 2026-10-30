@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Yazdan Samari. All rights reserved except as granted by LICENSE.
+// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+
 //! `engine-bench`: drives the real engine (same crates as the apps, manual §30).
 //!
 //! - `recv` / `send`: two processes, possibly on two machines (manual §41: manual

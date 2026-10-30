@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Yazdan Samari. All rights reserved except as granted by LICENSE.
+// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+
 //! The exported `TransferManager` object and its observer callback interface.
 //!
 //! Every async method is a Kotlin `suspend fun` / Swift `async` function. The

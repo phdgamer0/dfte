@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Yazdan Samari. All rights reserved except as granted by LICENSE.
+// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+
 //! `--wifi-direct DEVICE`: join a group the other device hosts before running a command
 //! (manual §5 Linux, §7), through NetworkManager so no root is needed (see `discovery::nm`).
 //!

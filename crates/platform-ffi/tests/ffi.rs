@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Yazdan Samari. All rights reserved except as granted by LICENSE.
+// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+
 //! Drives a transfer purely through the uniffi-exported surface, the way the
 //! Kotlin/Swift bindings do: FFI records, string paths, the callback interfaces.
 #![allow(clippy::unwrap_used, clippy::expect_used)]

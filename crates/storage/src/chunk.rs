@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Yazdan Samari. All rights reserved except as granted by LICENSE.
+// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+
 //! Chunk arithmetic and the sender-side chunk reader (manual §17/§18).
 //!
 //! All size/offset/count math is `u64` and checked, so nothing silently wraps

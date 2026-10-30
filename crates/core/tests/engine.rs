@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Yazdan Samari. All rights reserved except as granted by LICENSE.
+// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+
 //! End-to-end engine tests over loopback TCP (manual §32/§34).
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 

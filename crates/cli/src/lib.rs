@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Yazdan Samari. All rights reserved except as granted by LICENSE.
+// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+
 //! `dfte`: the Linux command-line front end of the transfer engine.
 //!
 //! The binary is a thin shell over [`app`]; the modules below hold the

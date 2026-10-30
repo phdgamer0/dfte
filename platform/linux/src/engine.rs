@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Yazdan Samari. All rights reserved except as granted by LICENSE.
+// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+
 //! The GTK side of the engine (manual §22/§23): one [`TransferManager`] for the
 //! process, its observer callbacks forwarded to the GTK main loop, and a small
 //! tokio runtime for the async calls the UI makes. No transfer logic lives here.

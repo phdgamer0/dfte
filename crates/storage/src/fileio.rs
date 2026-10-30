@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Yazdan Samari. All rights reserved except as granted by LICENSE.
+// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+
 //! Cross-platform positional I/O, pre-allocation and free-space helpers (manual §14).
 //!
 //! Everything here is blocking; call from `spawn_blocking` in async code.

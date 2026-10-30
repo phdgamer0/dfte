@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Yazdan Samari. All rights reserved except as granted by LICENSE.
+// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+
 //! Receiving on both backends at once, and the per-device sending default.
 //!
 //! The sender picks the backend (manual §15), and that choice now depends on

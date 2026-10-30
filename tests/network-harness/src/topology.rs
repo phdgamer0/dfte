@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Yazdan Samari. All rights reserved except as granted by LICENSE.
+// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+
 //! Two network namespaces joined by a veth pair, with netem on both ends
 //! (manual §31). Building the command lines is pure (unit-tested); running them
 //! needs CAP_NET_ADMIN + CAP_SYS_ADMIN.

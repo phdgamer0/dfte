@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Yazdan Samari. All rights reserved except as granted by LICENSE.
+// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+
 //! Multi-stream TCP backend (manual §15, Windows default). Each logical
 //! connection is 1 control + N data sockets; a short preamble on every socket
 //! groups them back together on the accepting side.

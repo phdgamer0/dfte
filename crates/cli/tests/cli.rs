@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Yazdan Samari. All rights reserved except as granted by LICENSE.
+// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+
 //! End-to-end tests: the real `dfte` binary, two processes over loopback, each
 //! with its own isolated `XDG_DATA_HOME`/`HOME` in a temp dir and stdin piped.
 //!

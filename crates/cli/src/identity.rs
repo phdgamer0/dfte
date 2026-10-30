@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Yazdan Samari. All rights reserved except as granted by LICENSE.
+// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+
 //! Persistent device identity (manual §6).
 //!
 //! The Ed25519 seed lives in `<data dir>/identity.key`: exactly 32 raw bytes,

@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Yazdan Samari. All rights reserved except as granted by LICENSE.
+# SPDX-License-Identifier: PolyForm-Shield-1.0.0
+
 name: CI
 
 on:
@@ -40,6 +43,13 @@ jobs:
           sudo apt-get update -q
           sudo apt-get install -y -q --no-install-recommends libgtk-4-dev libadwaita-1-dev
       - run: cargo fmt --all --check
+      - name: Every source file carries the copyright and license header
+        run: |
+          missing=$(git ls-files | grep -E '\.(rs|kt|kts|css|py)$|^tools/dist$|proguard-rules\.pro$|^\.github/workflows/.*\.yml$' \
+            | while read -r f; do head -n 4 "$f" | grep -q 'SPDX-License-Identifier: PolyForm-Shield-1.0.0' || echo "$f"; done)
+          if [ -n "$missing" ]; then
+            echo "::error::files without the copyright/SPDX header:"; echo "$missing"; exit 1
+          fi
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Plaintext bench mode stays out of app crates (manual §13, §30 #2)
         run: |

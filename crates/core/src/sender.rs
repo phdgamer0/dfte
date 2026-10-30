@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Yazdan Samari. All rights reserved except as granted by LICENSE.
+// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+
 //! Sender (manual §9.2/§9.3/§10/§14).
 //!
 //! Pipeline per data stream: a *producer* task takes the next chunk from the

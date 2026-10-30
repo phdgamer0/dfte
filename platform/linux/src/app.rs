@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Yazdan Samari. All rights reserved except as granted by LICENSE.
+// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+
 //! The desktop window (ui-spec.html "Desktop layout"): a sidebar with Send,
 //! Receive, Activity, Devices and Settings, a content pane, centered dialogs for
 //! decisions, and drag-and-drop anywhere to start a send.
@@ -352,6 +355,9 @@ impl Ui {
         }
         page.append(&card);
         page.append(&caption("Appearance follows the system light/dark setting."));
+        let about = caption(dfte_core::notice::NOTICE);
+        about.set_selectable(true);
+        page.append(&about);
         scrolled(&page)
     }
 

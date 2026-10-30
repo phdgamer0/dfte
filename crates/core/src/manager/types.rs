@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Yazdan Samari. All rights reserved except as granted by LICENSE.
+// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+
 //! Plain data the [`TransferManager`](super::TransferManager) hands out, its
 //! configuration and the observer callback interface (manual §22).
 

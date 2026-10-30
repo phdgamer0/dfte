@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Yazdan Samari. All rights reserved except as granted by LICENSE.
+// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+
 //! Where the app keeps its state (XDG base directories on Linux).
 //!
 //! - `$XDG_DATA_HOME/dfte` (default `~/.local/share/dfte`): `identity.key`,

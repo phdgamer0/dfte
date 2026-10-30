@@ -1,4 +1,6 @@
 #![allow(clippy::unwrap_used)]
+// Copyright (c) 2026 Yazdan Samari. All rights reserved except as granted by LICENSE.
+// SPDX-License-Identifier: PolyForm-Shield-1.0.0
 use proptest::prelude::*;
 use protocol::codec::{encode_frame, parse_frame};
 use protocol::header::{HEADER_LEN, Header, MAX_PAYLOAD, flags};

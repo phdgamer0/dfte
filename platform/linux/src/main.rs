@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Yazdan Samari. All rights reserved except as granted by LICENSE.
+// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+
 //! `dfte-gtk`: the Linux desktop app (manual §2.2, §24): GTK4 + libadwaita calling
 //! the Rust core directly, no FFI boundary (§1.3). Layout and tokens follow
 //! `.claude/design/ui-spec.html` ("Desktop layout").
@@ -36,7 +39,7 @@ fn main() -> gtk::glib::ExitCode {
                 return gtk::glib::ExitCode::SUCCESS;
             }
             "-V" | "--version" => {
-                println!("dfte-gtk {}", env!("CARGO_PKG_VERSION"));
+                println!("{}", dfte_core::notice::NOTICE);
                 return gtk::glib::ExitCode::SUCCESS;
             }
             _ => {}

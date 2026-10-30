@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Yazdan Samari. All rights reserved except as granted by LICENSE.
+// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+
 //! Sender-side per-chunk confirmation tracking (manual §9.3/§10). On both
 //! backends the transport already guarantees delivery; this only drives
 //! re-sends after an integrity NACK or a missing ChunkAck.

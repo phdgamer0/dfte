@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Yazdan Samari. All rights reserved except as granted by LICENSE.
+// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+
 //! QUIC backend (manual §15: default on Linux/Android/iOS), built on `quinn`.
 //!
 //! # Identity = TLS (manual §12.1)

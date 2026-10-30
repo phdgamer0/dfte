@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Yazdan Samari. All rights reserved except as granted by LICENSE.
+// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+
 //! LAN development backend (manual §41: a shared network is acceptable before radios).
 //!
 //! Each instance periodically sends a signed [`beacon`] to an administratively scoped IPv4

@@ -1,3 +1,6 @@
+/* Copyright (c) 2026 Yazdan Samari. All rights reserved except as granted by LICENSE. */
+/* SPDX-License-Identifier: PolyForm-Shield-1.0.0 */
+
 /* DFTE desktop styling: the tokens of .claude/design/ui-spec.html mapped onto
    libadwaita's named colours (spec rule: restyle toolkit defaults to the spec,
    keep native behaviour). Dark values live in style-dark.css. */

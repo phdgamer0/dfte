@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Yazdan Samari. All rights reserved except as granted by LICENSE.
+// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+
 //! Frame = 24-byte header + body of `payload_length` bytes (manual §8.1).
 //! Zero-allocation: these functions only slice the caller's buffer.
 

@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Yazdan Samari. All rights reserved except as granted by LICENSE.
+// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+
 //! Seal throughput at the 4 MiB chunk size, both suites (manual §13.1, §17).
 #![allow(clippy::unwrap_used)]
 

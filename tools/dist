@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Copyright (c) 2026 Yazdan Samari. All rights reserved except as granted by LICENSE.
+# SPDX-License-Identifier: PolyForm-Shield-1.0.0
+#
+# Builds the binaries we ship: the `dist` profile (no symbol names, whole-program
+# LTO) with build-machine paths replaced, so the binaries don't carry this
+# machine's directory layout or user name. Usage: tools/dist [cargo args...]
+# Default: the CLI and the desktop app. Output: target/dist/.
+set -euo pipefail
+root=$(cd "$(dirname "$0")/.." && pwd)
+cargo_home=${CARGO_HOME:-$HOME/.cargo}
+rustup_home=${RUSTUP_HOME:-$HOME/.rustup}
+export RUSTFLAGS="${RUSTFLAGS:-} --remap-path-prefix=$root=dfte --remap-path-prefix=$cargo_home=cargo --remap-path-prefix=$rustup_home=rustup --remap-path-prefix=$HOME=~"
+cd "$root"
+if [ $# -eq 0 ]; then
+    set -- -p dfte-cli -p dfte-gtk
+fi
+cargo build --profile dist "$@"

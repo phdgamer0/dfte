@@ -1,4 +1,6 @@
 #![no_main]
+// Copyright (c) 2026 Yazdan Samari. All rights reserved except as granted by LICENSE.
+// SPDX-License-Identifier: PolyForm-Shield-1.0.0
 //! Arbitrary sequences of valid-shaped messages in arbitrary order (manual §33).
 //! Invariant: nothing panics, and data-plane frames are only admitted once the
 //! connection is established and the manifest was accepted.

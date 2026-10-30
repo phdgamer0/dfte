@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Yazdan Samari. All rights reserved except as granted by LICENSE.
+// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+
 //! QR bootstrap payload for the iOS↔non-Apple SoftAP path (manual §6, §7, §12.1).
 //!
 //! The non-Apple peer starts a SoftAP and renders this payload as a QR code; iOS scans it,

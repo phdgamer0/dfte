@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Yazdan Samari. All rights reserved except as granted by LICENSE.
+// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+
 //! Handshake, AEAD session and device identity (manual §12).
 //!
 //! Everything here is sans-I/O: callers feed bytes in and get bytes out, so the

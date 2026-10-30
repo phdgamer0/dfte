@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Yazdan Samari. All rights reserved except as granted by LICENSE.
+// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+
 //! uniffi bindings for iOS/Android/Windows (manual §2, §22).
 //!
 //! A thin, FFI-safe wrapper over [`dfte_core::TransferManager`]: strings for
@@ -30,3 +33,9 @@ pub use manager::{ManagerConfig, TransferManager, TransferObserver, fingerprint_
 pub use types::{Direction, IncomingOffer, LinkInfo, LinkKind, LinkRole, OfferedFile, Peer, PeerAuth, Permission, Transfer, TransferState, TransportKind, VerifyRequest};
 
 uniffi::setup_scaffolding!();
+
+/// Copyright notice for the app's About screen (also embedded in the library).
+#[uniffi::export]
+pub fn notice() -> String {
+    dfte_core::notice::NOTICE.to_owned()
+}

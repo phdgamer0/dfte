@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Yazdan Samari. All rights reserved except as granted by LICENSE.
+// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+
 //! Validation of peer-supplied relative paths and safe joining under a root
 //! (manual §17/§34/§35). Every path from a peer's manifest is untrusted input.
 

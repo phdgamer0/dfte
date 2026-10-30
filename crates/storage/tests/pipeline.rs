@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Yazdan Samari. All rights reserved except as granted by LICENSE.
+// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+
 //! End-to-end through the public API: read source chunks into pooled buffers,
 //! write them to a staged file, track resume state across a simulated crash,
 //! then finalize and verify.

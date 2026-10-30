@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Yazdan Samari. All rights reserved except as granted by LICENSE.
+// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+
 //! The `engine-bench --json` report (`TransferReport`, crates/core/src/report.rs)
 //! as seen from outside, and the sanity checks every run must pass.
 

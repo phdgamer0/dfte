@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Yazdan Samari. All rights reserved except as granted by LICENSE.
+// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+
 //! User-facing strings, kept free of GTK so they can be unit-tested.
 
 use std::net::{IpAddr, Ipv4Addr, UdpSocket};

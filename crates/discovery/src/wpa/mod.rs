@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Yazdan Samari. All rights reserved except as granted by LICENSE.
+// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+
 //! Linux Wi-Fi Direct backend over `wpa_supplicant`'s D-Bus P2P API (manual §5 Linux, §6).
 //!
 //! Split in two so the logic is testable without a bus or a radio:

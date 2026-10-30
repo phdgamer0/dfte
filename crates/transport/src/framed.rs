@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Yazdan Samari. All rights reserved except as granted by LICENSE.
+// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+
 //! Frame I/O over any byte stream (TCP socket or QUIC stream), manual §8.1.
 //! Crypto-agnostic: bodies are passed through sealed; `core` opens/seals them.
 

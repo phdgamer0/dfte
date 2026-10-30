@@ -651,7 +651,7 @@ impl Shared {
         let mut opts = SendOptions::new(Arc::clone(&self.cfg.identity), verifier);
         opts.streams = self.cfg.streams;
         opts.in_flight_chunks = self.cfg.in_flight_chunks;
-        opts.hash_cache_dir = Some(self.cfg.hash_cache_dir());
+        opts.hash_cache_dir = Some(self.cfg.hash_cache_dir.clone());
         self.common(&mut opts.common, job, cancel);
         let on_phase = {
             let (s, j) = (Arc::clone(self), Arc::clone(job));

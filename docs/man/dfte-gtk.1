@@ -142,16 +142,14 @@ State directory, shared with
 (partial downloads and resume state).
 The two programs are the same device to everyone else.
 .TP
-.I $XDG_DATA_HOME/dfte/hashes/
-Sender's cache of file hashes.
-Safe to delete.
-Note that
-.BR dfte (1)
-keeps its own copy under
 .I $XDG_CACHE_HOME/dfte/hashes/
-instead.
+Sender's cache of file hashes, shared with
+.BR dfte (1).
+Safe to delete.
 .SH EXIT STATUS
-0, including when the engine could not start.
+0 when the window is closed normally.
+1 when the engine could not start; the reason is shown in a dialog and
+logged to standard error.
 In that case (for example, an unreadable identity key) the app shows the
 reason in a dialog and quits when it is dismissed, so check the dialog rather
 than the exit status.

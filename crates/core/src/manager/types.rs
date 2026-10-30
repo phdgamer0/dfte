@@ -151,6 +151,10 @@ pub struct ManagerConfig {
     /// App-private root (manual §14); partial files and resume sidecars live in
     /// `<storage_root>/staging`.
     pub storage_root: PathBuf,
+    /// The sender's hash cache, so a retry or resume doesn't re-read every file
+    /// before offering it (manual §19). Default `<storage_root>/hashes`; a desktop
+    /// app can point it at its cache directory (it is safe to delete).
+    pub hash_cache_dir: PathBuf,
     /// Shown to peers; unauthenticated.
     pub device_name: String,
     /// Backend this device sends with (manual §15); defaults to
@@ -191,16 +195,11 @@ pub struct ManagerConfig {
 
 impl ManagerConfig {
     pub fn new(identity: Arc<DeviceIdentity>, storage_root: impl Into<PathBuf>, device_name: impl Into<String>) -> Self {
-        Self { identity, storage_root: storage_root.into(), device_name: device_name.into(), transport: TransportKind::platform_default(), streams: 2, in_flight_chunks: crate::options::DEFAULT_WINDOW_CHUNKS, discovery: None, verifier: None, verify_timeout: Duration::from_secs(120), accept_timeout: Duration::from_secs(120), handshake_timeout: Duration::from_secs(30), idle_timeout: Duration::from_secs(300), progress_interval: Duration::from_millis(100), cancel_grace: Duration::from_secs(5), max_incoming: 8, worker_threads: None, tcp: TcpConfig::default(), quic: QuicConfig::default() }
+        let storage_root: PathBuf = storage_root.into();
+        Self { identity, hash_cache_dir: storage_root.join("hashes"), storage_root, device_name: device_name.into(), transport: TransportKind::platform_default(), streams: 2, in_flight_chunks: crate::options::DEFAULT_WINDOW_CHUNKS, discovery: None, verifier: None, verify_timeout: Duration::from_secs(120), accept_timeout: Duration::from_secs(120), handshake_timeout: Duration::from_secs(30), idle_timeout: Duration::from_secs(300), progress_interval: Duration::from_millis(100), cancel_grace: Duration::from_secs(5), max_incoming: 8, worker_threads: None, tcp: TcpConfig::default(), quic: QuicConfig::default() }
     }
 
     pub fn staging_dir(&self) -> PathBuf {
         self.storage_root.join("staging")
-    }
-
-    /// `<storage_root>/hashes`: the sender's hash cache, so a retry or resume doesn't
-    /// re-read every file before offering it (manual §19).
-    pub fn hash_cache_dir(&self) -> PathBuf {
-        self.storage_root.join("hashes")
     }
 }

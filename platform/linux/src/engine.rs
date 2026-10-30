@@ -94,6 +94,8 @@ impl Engine {
         cfg.worker_threads = Some(std::thread::available_parallelism().map_or(2, |n| n.get().min(MAX_WORKERS)));
         // The window refreshes at most 4 times a second while a transfer runs.
         cfg.progress_interval = PROGRESS_INTERVAL;
+        // Same place as the CLI's, so either app reuses the other's hashes.
+        cfg.hash_cache_dir = dfte_cli::paths::cache_dir().map_err(|e| e.user_message(None))?.join("hashes");
         let manager = Arc::new(TransferManager::new(cfg).map_err(|e| format!("The transfer engine could not start: {e}."))?);
         let (tx, rx) = async_channel::bounded(EVENT_CAPACITY);
         manager.set_observer(Box::new(Forward(tx)));

@@ -31,7 +31,9 @@ pub fn run() -> glib::ExitCode {
         app.activate();
         glib::ExitCode::SUCCESS
     });
-    app.connect_activate(|app| {
+    let failed = Rc::new(Cell::new(false));
+    let failed2 = Rc::clone(&failed);
+    app.connect_activate(move |app| {
         // Activating again (a second launch) just raises the window.
         if let Some(w) = app.active_window() {
             w.present();
@@ -39,14 +41,20 @@ pub fn run() -> glib::ExitCode {
         }
         match Engine::start() {
             Ok((engine, events)) => Ui::build(app, engine, events),
-            Err(msg) => fatal(app, &msg),
+            Err(msg) => {
+                failed2.set(true);
+                fatal(app, &msg);
+            }
         }
     });
-    app.run()
+    let code = app.run();
+    // A start failure is an error exit even though the dialog closed normally.
+    if failed.get() { glib::ExitCode::FAILURE } else { code }
 }
 
 /// The engine could not start (identity unreadable, ...): say why and quit.
 fn fatal(app: &adw::Application, msg: &str) {
+    tracing::error!("{msg}");
     let w = adw::ApplicationWindow::builder().application(app).default_width(480).default_height(240).build();
     w.present();
     let d = adw::AlertDialog::new(Some("DFTE can't start"), Some(msg));

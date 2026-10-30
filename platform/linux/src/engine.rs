@@ -13,6 +13,10 @@ use discovery::{Peer, PeerHandle};
 
 /// The engine's default port, shared with the CLI and the Android app.
 pub const PORT: u16 = 47_821;
+/// Engine worker threads for the desktop app.
+const MAX_WORKERS: usize = 4;
+/// How often running transfers report progress to the window.
+const PROGRESS_INTERVAL: std::time::Duration = std::time::Duration::from_millis(250);
 /// Observer events waiting for the main loop. The manager already coalesces
 /// progress, so this only fills if the UI thread stalls (manual §28: bounded).
 const EVENT_CAPACITY: usize = 256;
@@ -84,7 +88,12 @@ impl Engine {
         let identity: Arc<DeviceIdentity> = Arc::new(identity);
         let device_name = dfte_cli::identity::device_name();
         let fingerprint = identity.fingerprint();
-        let cfg = ManagerConfig::new(identity, data_dir.clone(), device_name.clone());
+        let mut cfg = ManagerConfig::new(identity, data_dir.clone(), device_name.clone());
+        // Network and AEAD work for Wi-Fi-speed links; one worker per core (12 on a
+        // laptop) only adds idle threads. Hashing and disk I/O use the blocking pool.
+        cfg.worker_threads = Some(std::thread::available_parallelism().map_or(2, |n| n.get().min(MAX_WORKERS)));
+        // The window refreshes at most 4 times a second while a transfer runs.
+        cfg.progress_interval = PROGRESS_INTERVAL;
         let manager = Arc::new(TransferManager::new(cfg).map_err(|e| format!("The transfer engine could not start: {e}."))?);
         let (tx, rx) = async_channel::bounded(EVENT_CAPACITY);
         manager.set_observer(Box::new(Forward(tx)));

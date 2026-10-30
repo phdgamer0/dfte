@@ -191,7 +191,7 @@ pub struct ManagerConfig {
 
 impl ManagerConfig {
     pub fn new(identity: Arc<DeviceIdentity>, storage_root: impl Into<PathBuf>, device_name: impl Into<String>) -> Self {
-        Self { identity, storage_root: storage_root.into(), device_name: device_name.into(), transport: TransportKind::platform_default(), streams: 2, in_flight_chunks: 16, discovery: None, verifier: None, verify_timeout: Duration::from_secs(120), accept_timeout: Duration::from_secs(120), handshake_timeout: Duration::from_secs(30), idle_timeout: Duration::from_secs(300), progress_interval: Duration::from_millis(100), cancel_grace: Duration::from_secs(5), max_incoming: 8, worker_threads: None, tcp: TcpConfig::default(), quic: QuicConfig::default() }
+        Self { identity, storage_root: storage_root.into(), device_name: device_name.into(), transport: TransportKind::platform_default(), streams: 2, in_flight_chunks: crate::options::DEFAULT_WINDOW_CHUNKS, discovery: None, verifier: None, verify_timeout: Duration::from_secs(120), accept_timeout: Duration::from_secs(120), handshake_timeout: Duration::from_secs(30), idle_timeout: Duration::from_secs(300), progress_interval: Duration::from_millis(100), cancel_grace: Duration::from_secs(5), max_incoming: 8, worker_threads: None, tcp: TcpConfig::default(), quic: QuicConfig::default() }
     }
 
     pub fn staging_dir(&self) -> PathBuf {

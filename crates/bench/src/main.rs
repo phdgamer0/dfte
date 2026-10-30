@@ -88,7 +88,7 @@ enum Cmd {
         #[arg(long)]
         plaintext: bool,
         /// Chunks in flight (× 4 MiB of buffer memory).
-        #[arg(long, default_value_t = 16)]
+        #[arg(long, default_value_t = dfte_core::options::DEFAULT_WINDOW_CHUNKS)]
         in_flight: usize,
     },
     /// Both sides in one process over 127.0.0.1.
@@ -111,9 +111,9 @@ enum Cmd {
         /// Base directory for disk mode.
         #[arg(long, default_value = ".")]
         dir: PathBuf,
-        #[arg(long, default_value_t = 16)]
+        #[arg(long, default_value_t = dfte_core::options::DEFAULT_WINDOW_CHUNKS)]
         in_flight: usize,
-        #[arg(long, default_value_t = 16)]
+        #[arg(long, default_value_t = dfte_core::options::DEFAULT_WINDOW_CHUNKS)]
         recv_buffers: usize,
         /// Run the transfer this many times (same source files).
         #[arg(long, default_value_t = 1)]

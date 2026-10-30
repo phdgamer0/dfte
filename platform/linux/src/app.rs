@@ -130,7 +130,7 @@ impl Ui {
         // Spec: a 224 px sidebar.
         let split = adw::NavigationSplitView::builder().min_sidebar_width(200.0).max_sidebar_width(240.0).build();
 
-        let ui = Rc::new(Self { app: app.clone(), engine, window: window.clone(), toasts: toasts.clone(), split: split.clone(), stack: stack.clone(), nav: nav.clone(), activity_count, listen: Cell::new(None), picked: RefCell::new(Vec::new()), picked_label: gtk::Label::builder().xalign(0.0).css_classes(["dfte-head"]).build(), drop_zone: gtk::Box::builder().orientation(gtk::Orientation::Vertical).spacing(12).css_classes(["dfte-drop"]).build(), peers: RefCell::new(HashMap::new()), peer_list: gtk::ListBox::builder().css_classes(["dfte-card"]).selection_mode(gtk::SelectionMode::Single).build(), peer_hint: caption("Looking for devices… Open DFTE on the other device and choose Receive."), address: gtk::Entry::builder().placeholder_text("Address, e.g. 192.168.1.20:47821").hexpand(true).build(), send_button: pill("Send", "suggested-action"), receive_rows: gtk::ListBox::builder().css_classes(["dfte-card"]).selection_mode(gtk::SelectionMode::None).build(), wfd_entry: gtk::Entry::builder().placeholder_text("Phone name, e.g. Galaxy A30").hexpand(true).build(), wfd_button: pill("Connect", "secondary"), wfd_status: caption("The phone needs DFTE open on Send or Receive. No router involved."), wfd: RefCell::new(None), active: gtk::ListBox::builder().css_classes(["dfte-card"]).selection_mode(gtk::SelectionMode::None).build(), earlier: gtk::ListBox::builder().css_classes(["dfte-card"]).selection_mode(gtk::SelectionMode::None).build(), activity_empty: caption("Nothing yet. Transfers you send or receive show up here."), jobs: RefCell::new(HashMap::new()), labels: RefCell::new(HashMap::new()), offer_peers: RefCell::new(HashMap::new()), devices: gtk::ListBox::builder().css_classes(["dfte-card"]).selection_mode(gtk::SelectionMode::None).build() });
+        let ui = Rc::new(Self { app: app.clone(), engine, window: window.clone(), toasts: toasts.clone(), split: split.clone(), stack: stack.clone(), nav: nav.clone(), activity_count, listen: Cell::new(None), picked: RefCell::new(Vec::new()), picked_label: gtk::Label::builder().xalign(0.0).css_classes(["dfte-head"]).build(), drop_zone: gtk::Box::builder().orientation(gtk::Orientation::Vertical).spacing(12).css_classes(["dfte-drop"]).build(), peers: RefCell::new(HashMap::new()), peer_list: gtk::ListBox::builder().css_classes(["dfte-card"]).selection_mode(gtk::SelectionMode::Single).build(), peer_hint: caption("Open DFTE on the other device and choose Receive."), address: gtk::Entry::builder().placeholder_text("Address, e.g. 192.168.1.20:47821").hexpand(true).build(), send_button: pill("Send", "suggested-action"), receive_rows: gtk::ListBox::builder().css_classes(["dfte-card"]).selection_mode(gtk::SelectionMode::None).build(), wfd_entry: gtk::Entry::builder().placeholder_text("Phone name, e.g. Galaxy A30").hexpand(true).build(), wfd_button: pill("Connect", "secondary"), wfd_status: caption("The phone needs DFTE open on Send or Receive. No router involved."), wfd: RefCell::new(None), active: gtk::ListBox::builder().css_classes(["dfte-card"]).selection_mode(gtk::SelectionMode::None).build(), earlier: gtk::ListBox::builder().css_classes(["dfte-card"]).selection_mode(gtk::SelectionMode::None).build(), activity_empty: caption("Nothing yet. Transfers you send or receive show up here."), jobs: RefCell::new(HashMap::new()), labels: RefCell::new(HashMap::new()), offer_peers: RefCell::new(HashMap::new()), devices: gtk::ListBox::builder().css_classes(["dfte-card"]).selection_mode(gtk::SelectionMode::None).build() });
 
         stack.add_named(&ui.send_page(), Some("send"));
         stack.add_named(&ui.receive_page(), Some("receive"));
@@ -233,10 +233,9 @@ impl Ui {
         }
 
         let right = vbox(12);
-        let nearby = gtk::Box::builder().spacing(6).build();
-        nearby.append(&label("Nearby"));
-        nearby.append(&gtk::Spinner::builder().spinning(true).build());
-        right.append(&nearby);
+        // No spinner: it redraws for as long as the page is open (8% of a core
+        // measured); the spec shows this state as plain text.
+        right.append(&label("Nearby · Looking for devices…"));
         right.append(&self.peer_hint);
         right.append(&self.peer_list);
         self.peer_list.set_visible(false);

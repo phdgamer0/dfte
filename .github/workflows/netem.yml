@@ -60,7 +60,14 @@ jobs:
         run: cargo build --profile ci-release --locked -p bench -p netem-harness
       - name: Run §31 matrix
         run: |
-          sudo ./target/ci-release/netem-harness --require-root \
+          # PRs: every impairment profile and both transports, but 16 MiB per run and
+          # one stream setting (16 short runs instead of 32 long ones, ~4 min -> ~1).
+          # Nightly and manual runs keep the full matrix.
+          quick=()
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            quick=(--size-mib 16 --streams 2)
+          fi
+          sudo ./target/ci-release/netem-harness --require-root "${quick[@]}" \
             --engine-bench target/ci-release/engine-bench \
             --work-dir "$RUNNER_TEMP/netem-work" \
             --out-dir netem-results \

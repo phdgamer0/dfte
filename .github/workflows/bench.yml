@@ -8,7 +8,14 @@ name: Benchmarks
 on:
   push:
     branches: [main]
+  # Only PRs that can change the measured code.
   pull_request:
+    paths:
+      - "crates/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - ".github/workflows/bench.yml"
   workflow_dispatch:
 
 # Every `run:` step fails on any error, unset variable, or failure inside a
@@ -20,6 +27,12 @@ defaults:
 concurrency:
   group: bench-${{ github.ref }}
   cancel-in-progress: true
+
+# Benches compile without LTO (PR and main alike, so comparisons stay fair):
+# criterion measures relative change, and LTO roughly doubled the compile time.
+env:
+  CARGO_PROFILE_BENCH_LTO: "false"
+  CARGO_PROFILE_BENCH_CODEGEN_UNITS: "16"
 
 jobs:
   criterion:
@@ -54,7 +67,14 @@ jobs:
           else
             ARGS="--save-baseline main"
           fi
-          cargo bench --workspace -- --warm-up-time 1 --measurement-time 3 --noplot $ARGS 2>&1 | tee bench.txt
+          # PRs: shorter measurements (a regression check against main, not a
+          # record). Pushes to main keep the longer ones for the baseline.
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            TIMES="--warm-up-time 0.5 --measurement-time 1"
+          else
+            TIMES="--warm-up-time 1 --measurement-time 3"
+          fi
+          cargo bench --workspace -- $TIMES --noplot $ARGS 2>&1 | tee bench.txt
       - name: Save main baseline
         if: github.event_name == 'push'
         uses: actions/cache/save@v4

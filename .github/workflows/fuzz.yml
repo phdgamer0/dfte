@@ -17,6 +17,11 @@ defaults:
   run:
     shell: bash --noprofile --norc -euo pipefail {0}
 
+# A newer push to the same PR/branch cancels the running build.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   fuzz:
     runs-on: ubuntu-latest

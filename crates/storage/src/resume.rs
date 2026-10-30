@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Yazdan Samari. All rights reserved except as granted by LICENSE.
+// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+
 //! Persisted resume state (manual §19): the manifest essentials plus a bitmap of
 //! confirmed chunks per file, stored as `<transfer_id>.resume.json` beside the
 //! staged data, written atomically (tmp + fsync + rename).

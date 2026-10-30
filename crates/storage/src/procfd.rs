@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Yazdan Samari. All rights reserved except as granted by LICENSE.
+// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+
 //! Source files the platform hands over as open descriptors.
 //!
 //! Android's file picker grants access to a file, not to its path: the app

@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Yazdan Samari. All rights reserved except as granted by LICENSE.
+// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+
 //! Data-plane AEAD (manual §12.2, §13, §14).
 //!
 //! Keys come from the completed Noise_XX split (see [`crate::handshake`]); this module

@@ -1,4 +1,6 @@
 #![allow(clippy::unwrap_used)]
+// Copyright (c) 2026 Yazdan Samari. All rights reserved except as granted by LICENSE.
+// SPDX-License-Identifier: PolyForm-Shield-1.0.0
 //! Protocol hot-path microbenchmarks (manual §30). Data-plane items must stay
 //! allocation-free; manifest/control items are measured for regression only.
 

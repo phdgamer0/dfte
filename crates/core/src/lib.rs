@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Yazdan Samari. All rights reserved except as granted by LICENSE.
+// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+
 //! Transfer engine (manual §9, §10, §12, §14, §17–§20, §22).
 //!
 //! Two layers of public surface:
@@ -15,6 +18,7 @@
 pub mod error;
 mod hooks;
 pub mod manager;
+pub mod notice;
 pub mod options;
 mod receiver;
 pub mod report;

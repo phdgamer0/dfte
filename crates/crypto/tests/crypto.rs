@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Yazdan Samari. All rights reserved except as granted by LICENSE.
+// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+
 //! Handshake + session tests (manual §32 crypto crate, §34 adversarial cases).
 #![allow(clippy::unwrap_used)]
 

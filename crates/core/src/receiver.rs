@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Yazdan Samari. All rights reserved except as granted by LICENSE.
+// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+
 //! Receiver (manual §9.2/§14/§17–§20).
 //!
 //! Each data stream has a task that reads a frame body straight into a pool

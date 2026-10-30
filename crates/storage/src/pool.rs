@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Yazdan Samari. All rights reserved except as granted by LICENSE.
+// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+
 //! Bounded pool of pre-allocated chunk buffers (manual §14/§27/§28).
 //!
 //! Buffers are allocated once when the pool is built and cycled; the pool's

@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Yazdan Samari. All rights reserved except as granted by LICENSE.
+// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+
 //! Session establishment on the control stream (manual §9.1/§12.1) and the sealed
 //! control channel used afterwards.
 //!

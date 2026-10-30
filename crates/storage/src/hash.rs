@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Yazdan Samari. All rights reserved except as granted by LICENSE.
+// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+
 //! BLAKE3 chunk and whole-file hashing (manual §19/§20).
 
 use std::io::{self, Read};

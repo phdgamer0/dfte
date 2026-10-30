@@ -11,6 +11,7 @@ members = [
     "crates/platform-ffi",
     "crates/bench",
     "crates/cli",
+    "platform/linux",
     "tests/network-harness",
 ]
 
@@ -93,3 +94,18 @@ debug = false
 
 [profile.bench]
 debug = "line-tables-only"
+
+# Shipped builds (packages, the Android library). Same code as release, but no
+# symbol names in the binary and whole-program LTO. Build-machine paths are
+# remapped by tools/dist and the Android Gradle build (`trim-paths` isn't stable).
+[profile.dist]
+inherits = "release"
+lto = "fat"
+strip = "symbols"
+
+# The Android library: like `dist`, but stripped by the Android Gradle plugin when
+# it packages the APK instead, because uniffi-bindgen reads its metadata through
+# the symbol table and runs on this library first.
+[profile.dist-android]
+inherits = "dist"
+strip = "none"

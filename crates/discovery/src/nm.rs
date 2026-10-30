@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Yazdan Samari. All rights reserved except as granted by LICENSE.
+// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+
 //! Linux Wi-Fi Direct through NetworkManager's D-Bus API (manual §5 Linux), feature `linux-nm`.
 //!
 //! Why next to [`crate::wpa`]: on desktops NetworkManager owns `wpa_supplicant`, whose bus

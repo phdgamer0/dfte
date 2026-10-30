@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Yazdan Samari. All rights reserved except as granted by LICENSE.
+// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+
 //! Storage micro-benchmarks (manual §13.1/§30): BLAKE3 over one 4 MiB chunk and
 //! positional chunk reads from a (page-cached) temp file.
 #![allow(clippy::unwrap_used)]

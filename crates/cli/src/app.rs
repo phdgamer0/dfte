@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Yazdan Samari. All rights reserved except as granted by LICENSE.
+// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+
 //! Command definitions and wiring (clap → engine).
 
 use std::future::Future;
@@ -39,7 +42,7 @@ Exit codes:
 State lives in $XDG_DATA_HOME/dfte (default ~/.local/share/dfte).";
 
 #[derive(Parser, Debug)]
-#[command(name = "dfte", version, about = "Direct device-to-device file transfer (no Internet, no cloud).", after_help = EXIT_CODES)]
+#[command(name = "dfte", version, long_version = concat!(env!("CARGO_PKG_VERSION"), "\n", dfte_core::copyright!()), about = "Direct device-to-device file transfer (no Internet, no cloud).", after_help = EXIT_CODES)]
 pub struct Cli {
     /// More log output on stderr (-v info, -vv debug, -vvv trace). Logs never contain keys or file contents.
     #[arg(short, long, action = clap::ArgAction::Count, global = true)]

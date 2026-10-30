@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Yazdan Samari. All rights reserved except as granted by LICENSE.
+// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+
 //! Storage-layer error type. Converted into `EngineError` at the `core` boundary (manual §36).
 
 use std::io;

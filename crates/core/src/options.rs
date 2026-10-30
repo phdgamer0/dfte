@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Yazdan Samari. All rights reserved except as granted by LICENSE.
+// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+
 //! Caller-facing knobs: identity, peer verification, progress, cancellation.
 
 use std::fmt;
@@ -198,12 +201,19 @@ pub struct SendOptions {
     pub insecure_plaintext: bool,
 }
 
+/// Default in-flight window and receive pool, in 4 MiB chunks: 32 MiB per side, the
+/// low end of manual §14's 8-16. Measured (1 GiB loopback, laptop): 16 chunks gave no
+/// more throughput than 6-8 (TCP 787 vs 889 MiB/s, QUIC 283 vs 278) at twice the
+/// memory (peak RSS 241 vs 141 MB, QUIC 260 vs 123 MB); a Wi-Fi link's bandwidth-delay
+/// product is well under one chunk.
+pub const DEFAULT_WINDOW_CHUNKS: usize = 8;
+
 impl SendOptions {
     pub fn new(identity: Arc<DeviceIdentity>, verifier: Arc<dyn PeerVerifier>) -> Self {
         Self {
             common: CommonOptions::new(identity, verifier),
             streams: 2,
-            in_flight_chunks: 16,
+            in_flight_chunks: DEFAULT_WINDOW_CHUNKS,
             ack_timeout: Duration::from_secs(30),
             finalize_timeout: Duration::from_secs(600),
             hash_threads: 0,
@@ -237,7 +247,7 @@ impl ReceiveOptions {
         Self {
             common: CommonOptions::new(identity, verifier),
             max_streams: transport::MAX_DATA_STREAMS as u8,
-            pool_buffers: 16,
+            pool_buffers: DEFAULT_WINDOW_CHUNKS,
             flush_every: storage::resume::DEFAULT_FLUSH_EVERY,
             on_manifest: None,
             #[cfg(feature = "bench-insecure-plaintext")]

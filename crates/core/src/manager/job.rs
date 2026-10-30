@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Yazdan Samari. All rights reserved except as granted by LICENSE.
+// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+
 //! One job's live state. Counters the engine bumps per chunk are atomics; the
 //! rest sits behind a short-lived std mutex that is never held across `.await`.
 

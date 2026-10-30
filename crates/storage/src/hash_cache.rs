@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Yazdan Samari. All rights reserved except as granted by LICENSE.
+// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+
 //! Cache of whole-file BLAKE3 + per-chunk piece hashes, keyed by file identity.
 //!
 //! The sender must hash every file before offering the manifest (manual §19), so

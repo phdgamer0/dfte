@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Yazdan Samari. All rights reserved except as granted by LICENSE.
+// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+
 //! Bounded, rate-limited peer table fed by LAN beacons (manual §34: resource exhaustion).
 //!
 //! Pure and synchronous: callers pass the monotonic `now` and the wall-clock time in

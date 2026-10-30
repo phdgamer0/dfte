@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Yazdan Samari. All rights reserved except as granted by LICENSE.
+// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+
 //! QUIC-specific behaviour: TLS identity binding (manual §12.1) and refusal of
 //! peers whose certificate is not an Ed25519 identity (manual §34).
 #![allow(clippy::unwrap_used)]

@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Yazdan Samari. All rights reserved except as granted by LICENSE.
+// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+
 //! Loopback framed throughput per backend and stream count (manual §11/§30,
 //! benchmark #6 on loopback). Measures the transport alone: no app-level
 //! crypto, no disk. QUIC always encrypts (TLS 1.3 AEAD inside quinn) while TCP

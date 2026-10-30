@@ -1,0 +1,31 @@
+[package]
+name = "dfte-gtk"
+description = "DFTE for Linux desktops: GTK4 + libadwaita on the Rust core, no FFI (manual §1.3, §24)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[[bin]]
+name = "dfte-gtk"
+path = "src/main.rs"
+bench = false
+
+[lints]
+workspace = true
+
+# GTK is a Linux front end; elsewhere the binary is a stub, so `cargo test --workspace`
+# keeps working on the macOS/Windows runners without GTK installed.
+[target.'cfg(target_os = "linux")'.dependencies]
+dfte-core.workspace = true
+dfte-cli = { path = "../../crates/cli" }
+discovery = { workspace = true, features = ["linux-nm"] }
+transport.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "sync"] }
+tracing.workspace = true
+tracing-subscriber.workspace = true
+async-channel = "2"
+# Oldest versions the features below need: GTK 4.12 and libadwaita 1.5 (Ubuntu 24.04 ships 4.14 / 1.5).
+gtk = { package = "gtk4", version = "0.11", features = ["v4_12"] }
+adw = { package = "libadwaita", version = "0.9", features = ["v1_5"] }

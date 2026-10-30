@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Yazdan Samari. All rights reserved except as granted by LICENSE.
+// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+
 //! `netem-harness`: the §31 loss/latency/reorder matrix over `engine-bench`.
 //!
 //! Needs CAP_NET_ADMIN + CAP_SYS_ADMIN (root). In CI: `sudo netem-harness

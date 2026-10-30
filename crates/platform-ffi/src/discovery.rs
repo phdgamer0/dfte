@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Yazdan Samari. All rights reserved except as granted by LICENSE.
+// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+
 //! Platform discovery as a uniffi callback interface (manual §5): Android
 //! (`WifiP2pManager`/`WifiAwareManager`/`startLocalOnlyHotspot`), iOS
 //! (`NEHotspotConfigurationManager`, AWDL) and Windows (`WiFiDirect`) implement

@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Yazdan Samari. All rights reserved except as granted by LICENSE.
+// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+
 //! Discovery hot-ish paths: beacon sign/verify, QR encode/parse, peer-table ingest.
 #![allow(clippy::unwrap_used)]
 

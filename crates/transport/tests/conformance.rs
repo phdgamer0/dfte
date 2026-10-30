@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Yazdan Samari. All rights reserved except as granted by LICENSE.
+// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+
 //! Shared conformance suite (manual §32): every backend must pass the same
 //! tests. QUIC plugs in by adding one more `#[tokio::test]` calling `suite`.
 #![allow(clippy::unwrap_used)]

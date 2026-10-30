@@ -1,4 +1,6 @@
 #![allow(clippy::unwrap_used)]
+// Copyright (c) 2026 Yazdan Samari. All rights reserved except as granted by LICENSE.
+// SPDX-License-Identifier: PolyForm-Shield-1.0.0
 //! Phase 1 definition of done (manual §40): two in-process peers, driven only by
 //! byte buffers, walk connect -> manifest -> transfer -> complete.
 

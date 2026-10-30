@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Yazdan Samari. All rights reserved except as granted by LICENSE.
+// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+
 //! Binary form of `crypto::fingerprint_of` fingerprints, for compact wire/QR encodings.
 //!
 //! The text form (`a1b2-c3d4-e5f6-0718-293a-4b5c`) stays defined by the `crypto` crate;

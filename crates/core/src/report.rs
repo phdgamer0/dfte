@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Yazdan Samari. All rights reserved except as granted by LICENSE.
+// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+
 //! What a finished transfer reports back (manual §30 metrics, §38 fields).
 
 use std::path::PathBuf;

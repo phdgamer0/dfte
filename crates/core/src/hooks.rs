@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Yazdan Samari. All rights reserved except as granted by LICENSE.
+// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+
 //! Internal hooks the [`TransferManager`](crate::TransferManager) uses to follow
 //! a transfer through its phases and to ask the user about an incoming offer.
 //! The public free functions run without them.

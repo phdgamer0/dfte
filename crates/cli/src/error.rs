@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Yazdan Samari. All rights reserved except as granted by LICENSE.
+// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+
 //! User-facing error copy and exit codes (manual §36).
 //!
 //! Every [`EngineError`] variant maps to specific copy (never a raw debug string)

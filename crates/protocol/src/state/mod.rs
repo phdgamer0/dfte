@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Yazdan Samari. All rights reserved except as granted by LICENSE.
+// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+
 //! Pure, synchronous state machines (manual §9). No I/O, no clocks of their
 //! own: time is passed in, so every transition is deterministic and testable.
 

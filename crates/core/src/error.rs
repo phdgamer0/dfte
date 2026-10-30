@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Yazdan Samari. All rights reserved except as granted by LICENSE.
+// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+
 //! The single error type that crosses the engine boundary (manual §36).
 //!
 //! Lower crates keep their own error types; they are mapped here into variants a

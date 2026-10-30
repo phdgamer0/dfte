@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Yazdan Samari. All rights reserved except as granted by LICENSE.
+// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+
 //! [`P2pBus`] over the system D-Bus with `zbus` (feature `linux-wpa`).
 //!
 //! Interfaces used (wpa_supplicant `doc/dbus.doxygen`):

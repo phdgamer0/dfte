@@ -1,4 +1,6 @@
 #![no_main]
+// Copyright (c) 2026 Yazdan Samari. All rights reserved except as granted by LICENSE.
+// SPDX-License-Identifier: PolyForm-Shield-1.0.0
 //! Untrusted manifests and path strings (manual §33/§35).
 
 use libfuzzer_sys::fuzz_target;

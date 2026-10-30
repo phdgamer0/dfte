@@ -1,0 +1,25 @@
+/* Copyright (c) 2026 Yazdan Samari. All rights reserved except as granted by LICENSE. */
+/* SPDX-License-Identifier: PolyForm-Shield-1.0.0 */
+
+/* Dark tokens (ui-spec.html, prefers-color-scheme: dark). */
+@define-color accent_bg_color #8b8cf2;
+@define-color accent_color #8b8cf2;
+@define-color accent_fg_color #0f0f1a;
+@define-color window_bg_color #111214;
+@define-color view_bg_color #111214;
+@define-color headerbar_bg_color #111214;
+@define-color sidebar_bg_color #111214;
+@define-color card_bg_color #1a1b1e;
+@define-color dialog_bg_color #1a1b1e;
+@define-color popover_bg_color #1a1b1e;
+@define-color window_fg_color #ececef;
+@define-color view_fg_color #ececef;
+@define-color dfte_surface_2 #232428;
+@define-color dfte_line #2c2d32;
+@define-color dfte_text_2 #a3a5ad;
+@define-color dfte_text_3 #6f717a;
+@define-color dfte_accent_soft #24244a;
+@define-color dfte_ok #5cc49a;
+@define-color dfte_ok_soft #16302a;
+@define-color dfte_danger #ec7a72;
+@define-color dfte_danger_soft #3a1f1d;

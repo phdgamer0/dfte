@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Yazdan Samari. All rights reserved except as granted by LICENSE.
+// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+
 //! Delivers observer callbacks on one dedicated thread, so a slow or blocking
 //! observer can never stall a runtime worker or a transfer.
 //!

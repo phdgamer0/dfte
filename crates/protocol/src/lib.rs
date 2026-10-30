@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Yazdan Samari. All rights reserved except as granted by LICENSE.
+// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+
 //! Wire format, control messages and protocol state machines (manual §8-§11).
 //! Pure and I/O-free so it can be fuzzed and tested without a runtime (manual §3).
 

@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Yazdan Samari. All rights reserved except as granted by LICENSE.
+// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+
 //! File I/O, chunking, pre-allocation and resume state (manual §14/§17-§20).
 //!
 //! Functions with a `_blocking` suffix perform synchronous filesystem I/O and

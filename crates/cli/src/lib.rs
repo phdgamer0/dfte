@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Yazdan Samari. All rights reserved except as granted by LICENSE.
+// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+
 //! `dfte`: the Linux command-line front end of the transfer engine.
 //!
 //! The binary is a thin shell over [`app`]; the modules below hold the
@@ -21,9 +24,11 @@
 //! `--wifi-direct DEVICE` joins a group the other device hosts through
 //! NetworkManager (no root), then discovers it with beacons over that group.
 //!
+//! When this machine ends up owning the group, NetworkManager serves DHCP
+//! through dnsmasq, which must be installed (no root needed at run time).
+//!
 //! # Not covered (needs root)
-//! Hosting the iOS SoftAP (`dfte qr` only prints the payload), and Wi-Fi Direct
-//! groups this machine owns (NetworkManager wants dnsmasq for those).
+//! Hosting the iOS SoftAP: `dfte qr` only prints the payload.
 
 pub mod app;
 pub mod error;

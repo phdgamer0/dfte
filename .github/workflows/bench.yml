@@ -1,3 +1,6 @@
+# Copyright (c) 2026 Yazdan Samari. All rights reserved except as granted by LICENSE.
+# SPDX-License-Identifier: PolyForm-Shield-1.0.0
+
 name: Benchmarks
 
 # see manual §30: microbenchmarks on every PR, compared against the latest
@@ -27,6 +30,12 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: bench
+      # platform/linux (dfte-gtk) links GTK 4 + libadwaita (Ubuntu 24.04: 4.14 / 1.5).
+      - name: GTK dev libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends libgtk-4-dev libadwaita-1-dev
       # PRs compare against main. Pushes to main restore the previous main
       # baseline too, so each merge is compared with the one before it (and
       # criterion doesn't log "Failed to access .../main/sample.json").

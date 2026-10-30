@@ -1,4 +1,6 @@
 #![no_main]
+// Copyright (c) 2026 Yazdan Samari. All rights reserved except as granted by LICENSE.
+// SPDX-License-Identifier: PolyForm-Shield-1.0.0
 //! Arbitrary bytes into the frame parser and every message decoder (manual §33).
 
 use libfuzzer_sys::fuzz_target;

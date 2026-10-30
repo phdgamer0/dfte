@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Yazdan Samari. All rights reserved except as granted by LICENSE.
+// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+
 //! Hardware probe for the wpa_supplicant backend (needs `--features linux-wpa`).
 //!
 //! `cargo run -p discovery --features linux-wpa --example wpa_probe -- wlan0`

@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Yazdan Samari. All rights reserved except as granted by LICENSE.
+// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.plugin.compose")
@@ -12,7 +15,9 @@ val rustTarget = "aarch64-linux-android"
 val rustAbi = "arm64-v8a"
 val minApi = 26
 val ndkVer = "30.0.16248370"
-val rustLib = repoRoot.resolve("target/$rustTarget/release/libplatform_ffi.so")
+// `dist-android` profile (Cargo.toml): whole-program LTO, no build paths; the APK
+// packaging strips its symbols.
+val rustLib = repoRoot.resolve("target/$rustTarget/dist-android/libplatform_ffi.so")
 // Plain directories (AGP 9 refuses Provider paths in source sets); preBuild
 // depends on the tasks that fill them.
 val jniOut: File = layout.buildDirectory.dir("rust/jniLibs").get().asFile
@@ -65,7 +70,7 @@ val ndkBin = provider {
 val cargoBuildAndroid = tasks.register<Exec>("cargoBuildAndroid") {
     description = "Cross-builds the Rust core for $rustTarget."
     workingDir = repoRoot
-    commandLine("cargo", "build", "--release", "-p", "platform-ffi", "--target", rustTarget)
+    commandLine("cargo", "build", "--profile", "dist-android", "-p", "platform-ffi", "--target", rustTarget)
     doFirst {
         val bin = ndkBin.get()
         val env = rustTarget.uppercase().replace('-', '_')
@@ -73,6 +78,11 @@ val cargoBuildAndroid = tasks.register<Exec>("cargoBuildAndroid") {
         environment("CARGO_TARGET_${env}_LINKER", clang)
         environment("CC_${rustTarget.replace('-', '_')}", clang)
         environment("AR_${rustTarget.replace('-', '_')}", "$bin/llvm-ar")
+        // Keep this machine's paths (and user name) out of the library.
+        val home = System.getProperty("user.home")
+        val cargoHome = System.getenv("CARGO_HOME") ?: "$home/.cargo"
+        val rustupHome = System.getenv("RUSTUP_HOME") ?: "$home/.rustup"
+        environment("RUSTFLAGS", listOf("--remap-path-prefix=${repoRoot.path}=dfte", "--remap-path-prefix=$cargoHome=cargo", "--remap-path-prefix=$rustupHome=rustup", "--remap-path-prefix=$home=~").joinToString(" "))
     }
     // Cargo does its own up-to-date checks.
     outputs.upToDateWhen { false }

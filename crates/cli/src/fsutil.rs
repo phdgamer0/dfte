@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Yazdan Samari. All rights reserved except as granted by LICENSE.
+// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+
 //! Private-file helpers: 0700 directories, atomic 0600 writes, permission checks.
 //!
 //! On non-Unix platforms the permission parts are no-ops (the per-user profile

@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Yazdan Samari. All rights reserved except as granted by LICENSE.
+// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+
 //! netem profiles (manual §31) and the parts of a netem spec the checks need.
 
 use serde::Serialize;

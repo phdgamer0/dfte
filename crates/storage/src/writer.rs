@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Yazdan Samari. All rights reserved except as granted by LICENSE.
+// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+
 //! Receiver-side staged file: pre-allocated in the app-private staging dir,
 //! written chunk-by-chunk at random offsets, verified, then renamed into place
 //! (manual §14/§18/§20).

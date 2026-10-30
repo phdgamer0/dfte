@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Yazdan Samari. All rights reserved except as granted by LICENSE.
+// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+
 //! The app-facing Transfer Manager (manual §22, §23, §27).
 //!
 //! One [`TransferManager`] per process. It owns:
@@ -651,7 +654,7 @@ impl Shared {
         let mut opts = SendOptions::new(Arc::clone(&self.cfg.identity), verifier);
         opts.streams = self.cfg.streams;
         opts.in_flight_chunks = self.cfg.in_flight_chunks;
-        opts.hash_cache_dir = Some(self.cfg.hash_cache_dir());
+        opts.hash_cache_dir = Some(self.cfg.hash_cache_dir.clone());
         self.common(&mut opts.common, job, cancel);
         let on_phase = {
             let (s, j) = (Arc::clone(self), Arc::clone(job));

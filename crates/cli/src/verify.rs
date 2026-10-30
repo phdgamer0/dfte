@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Yazdan Samari. All rights reserved except as granted by LICENSE.
+// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+
 //! Peer verification on a terminal (manual §9.1, §12.1, §35).
 //!
 //! Order of checks, after the handshake authenticated the peer's key:

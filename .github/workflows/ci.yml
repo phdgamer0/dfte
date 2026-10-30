@@ -14,6 +14,11 @@ on:
 
 # Every `run:` step fails on any error, unset variable, or failure inside a
 # pipeline (e.g. `cargo ... | tee`), so no error is swallowed.
+# Read-only token: nothing here writes to the repository (caches and artifacts
+# don't use it).
+permissions:
+  contents: read
+
 defaults:
   run:
     shell: bash --noprofile --norc -euo pipefail {0}

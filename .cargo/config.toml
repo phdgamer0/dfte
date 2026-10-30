@@ -1,0 +1,8 @@
+# Copyright (c) 2026 Yazdan Samari. All rights reserved except as granted by LICENSE.
+# SPDX-License-Identifier: PolyForm-Shield-1.0.0
+
+# musl (Alpine and friends): Rust links musl targets statically by default, but
+# the desktop app links GTK and libadwaita, which are shared libraries; a static
+# binary can't. Link musl dynamically, as Alpine's own Rust packages do.
+[target.'cfg(target_env = "musl")']
+rustflags = ["-C", "target-feature=-crt-static"]

@@ -1,0 +1,12 @@
+# Copyright (c) 2026 Yazdan Samari. All rights reserved except as granted by LICENSE.
+# SPDX-License-Identifier: PolyForm-Shield-1.0.0
+
+# Test vectors, benchmark inputs and fuzz seeds are meant to be fixed bytes, so
+# rules like "hard-coded cryptographic value" only produce noise there.
+# (#[cfg(test)] modules inside src/ can't be excluded by path; their alerts are
+# dismissed as "used in tests".)
+paths-ignore:
+  - "**/benches/**"
+  - "**/tests/**"
+  - "tests/**"
+  - "fuzz/**"

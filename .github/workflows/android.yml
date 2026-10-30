@@ -13,9 +13,19 @@ on:
     - cron: "30 3 * * *"
   workflow_dispatch:
 
+# Read-only token: nothing here writes to the repository (caches and artifacts
+# don't use it).
+permissions:
+  contents: read
+
 defaults:
   run:
     shell: bash --noprofile --norc -euo pipefail {0}
+
+# A newer push to the same PR/branch cancels the running build.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   NDK_VERSION: "30.0.16248370"
@@ -46,7 +56,15 @@ jobs:
           echo "sdk.dir=$ANDROID_HOME" > platform/android/local.properties
       - name: Build release APK
         working-directory: platform/android
-        run: ./gradlew assembleRelease --console=plain
+        # PRs only need to know the app builds: the Rust library uses ci-release
+        # (no LTO, 16 codegen units). Nightly/manual builds produce the shipping
+        # library (dist-android: fat LTO, remapped paths).
+        run: |
+          profile=()
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            profile=(-PdfteRustProfile=ci-release)
+          fi
+          ./gradlew assembleRelease --console=plain "${profile[@]}"
       - uses: actions/upload-artifact@v4
         with:
           name: dfte-android-arm64

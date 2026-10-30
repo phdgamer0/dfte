@@ -17,7 +17,9 @@ val minApi = 26
 val ndkVer = "30.0.16248370"
 // `dist-android` profile (Cargo.toml): whole-program LTO, no build paths; the APK
 // packaging strips its symbols.
-val rustLib = repoRoot.resolve("target/$rustTarget/dist-android/libplatform_ffi.so")
+// `-PdfteRustProfile=ci-release` builds faster for CI checks (no LTO).
+val rustProfile = (findProperty("dfteRustProfile") as String?) ?: "dist-android"
+val rustLib = repoRoot.resolve("target/$rustTarget/$rustProfile/libplatform_ffi.so")
 // Plain directories (AGP 9 refuses Provider paths in source sets); preBuild
 // depends on the tasks that fill them.
 val jniOut: File = layout.buildDirectory.dir("rust/jniLibs").get().asFile
@@ -70,7 +72,7 @@ val ndkBin = provider {
 val cargoBuildAndroid = tasks.register<Exec>("cargoBuildAndroid") {
     description = "Cross-builds the Rust core for $rustTarget."
     workingDir = repoRoot
-    commandLine("cargo", "build", "--profile", "dist-android", "-p", "platform-ffi", "--target", rustTarget)
+    commandLine("cargo", "build", "--profile", rustProfile, "-p", "platform-ffi", "--target", rustTarget)
     doFirst {
         val bin = ndkBin.get()
         val env = rustTarget.uppercase().replace('-', '_')

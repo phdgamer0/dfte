@@ -1,0 +1,46 @@
+# Copyright (c) 2026 Yazdan Samari. All rights reserved except as granted by LICENSE.
+# SPDX-License-Identifier: PolyForm-Shield-1.0.0
+
+# Code scanning for the Rust workspace and the workflow files themselves, both
+# analysed from source (no build). The workflow scan is quick and runs on every
+# PR; the Rust scan takes ~7 min (it extracts every dependency), so it runs on
+# each merge to main and weekly instead of holding up pull requests. The Kotlin app
+# needs a real build and has its own workflow (codeql-android.yml). The repo's
+# CodeQL "default setup" is off: it can't build the Android app.
+name: CodeQL
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "23 4 * * 1"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  analyze:
+    name: analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        language: ${{ fromJSON(github.event_name == 'pull_request' && '["actions"]' || '["rust", "actions"]') }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: none
+          config-file: ./.github/codeql-config.yml
+      - uses: github/codeql-action/analyze@v3
+        with:
+          category: /language:${{ matrix.language }}

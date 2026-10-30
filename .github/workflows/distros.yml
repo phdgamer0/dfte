@@ -1,0 +1,151 @@
+# Copyright (c) 2026 Yazdan Samari. All rights reserved except as granted by LICENSE.
+# SPDX-License-Identifier: PolyForm-Shield-1.0.0
+
+# The whole workspace (engine, CLI, GTK app) built and tested on other Linux
+# distributions and on arm64, plus Windows on arm64. CI covers Ubuntu x86_64,
+# Windows x86_64 and macOS arm64; this catches what differs elsewhere: glibc vs
+# musl (Alpine), newer/older GTK and libadwaita, compilers, and aarch64 codegen.
+#
+# Too slow for every PR: nightly, on main, on demand, and on PRs that change
+# what it depends on (toolchain, lockfile, this file).
+name: Distros
+
+on:
+  schedule:
+    - cron: "41 2 * * *"
+  push:
+    branches: [main]
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "rust-toolchain.toml"
+      - "Cargo.lock"
+      - ".github/workflows/distros.yml"
+
+# Read-only token: nothing here writes to the repository (caches and artifacts
+# don't use it).
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash --noprofile --norc -euo pipefail {0}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  linux:
+    name: ${{ matrix.distro }} (${{ matrix.arch }})
+    runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+    container: ${{ matrix.image }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [x86_64, arm64]
+        distro: [debian-13, fedora, opensuse-tumbleweed, alpine, arch]
+        include:
+          - distro: debian-13
+            image: debian:trixie
+            install: apt-get update -q && apt-get install -y -q --no-install-recommends curl ca-certificates git build-essential pkg-config libgtk-4-dev libadwaita-1-dev
+            adduser: useradd -m builder
+          - distro: fedora
+            image: fedora:latest
+            install: dnf install -y -q curl git gcc gcc-c++ make pkgconf-pkg-config gtk4-devel libadwaita-devel
+            adduser: useradd -m builder
+          - distro: opensuse-tumbleweed
+            image: opensuse/tumbleweed:latest
+            install: zypper -n -q install curl git gcc gcc-c++ make tar gzip pkgconf gtk4-devel libadwaita-devel shadow
+            adduser: useradd -m builder
+          # musl libc instead of glibc.
+          - distro: alpine
+            image: alpine:latest
+            install: apk add --no-cache curl git bash build-base pkgconf gtk4.0-dev libadwaita-dev
+            adduser: adduser -D builder
+          - distro: arch
+            image: archlinux:latest
+            install: pacman -Syu --noconfirm --needed curl git base-devel gtk4 libadwaita
+            adduser: useradd -m builder
+        exclude:
+          # Arch Linux publishes no official arm64 image.
+          - distro: arch
+            arch: arm64
+          # GitHub runs JavaScript actions (checkout) in Alpine containers on x64
+          # only; arm64 Alpine is the `alpine-arm` job below.
+          - distro: alpine
+            arch: arm64
+    steps:
+      # Plain sh: some images have no bash until this step installs it.
+      - name: Packages
+        shell: sh
+        run: ${{ matrix.install }}
+      - uses: actions/checkout@v4
+      # Tests run as an ordinary user, like the apps do: as root, permission
+      # checks in the code under test would pass for the wrong reason.
+      - name: Build user
+        run: |
+          ${{ matrix.adduser }}
+          chown -R builder "$GITHUB_WORKSPACE"
+      - name: Rust (toolchain from rust-toolchain.toml)
+        run: |
+          su builder -c 'curl -sSf https://sh.rustup.rs | sh -s -- -y -q --profile minimal --default-toolchain none'
+          su builder -c 'cd "$0" && . "$HOME/.cargo/env" && rustup toolchain install && rustc -vV' "$GITHUB_WORKSPACE"
+      - name: Test
+        run: su builder -c 'cd "$0" && . "$HOME/.cargo/env" && cargo test --workspace --all-targets --locked' "$GITHUB_WORKSPACE"
+      - name: Desktop app starts its engine-free paths
+        run: su builder -c 'cd "$0" && . "$HOME/.cargo/env" && cargo run -q --locked -p dfte-gtk -- --version && cargo run -q --locked -p dfte-cli -- --version' "$GITHUB_WORKSPACE"
+
+  # Alpine on arm64, driven with `docker run` because actions can't run inside
+  # an arm64 Alpine container. Same steps as the matrix above.
+  alpine-arm:
+    name: alpine (arm64)
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test in alpine:latest
+        run: |
+          docker run --rm -v "$PWD:/src" alpine:latest sh -euc '
+            apk add --no-cache curl git bash build-base pkgconf gtk4.0-dev libadwaita-dev
+            adduser -D builder
+            cp -a /src /home/builder/dfte && chown -R builder /home/builder/dfte
+            su builder -c "
+              set -eu
+              curl -sSf https://sh.rustup.rs | sh -s -- -y -q --profile minimal --default-toolchain none
+              . \$HOME/.cargo/env
+              cd \$HOME/dfte
+              rustup toolchain install
+              cargo test --workspace --all-targets --locked
+              cargo run -q --locked -p dfte-gtk -- --version
+              cargo run -q --locked -p dfte-cli -- --version
+            "
+          '
+
+  ubuntu-arm:
+    name: ubuntu-24.04 (arm64)
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.98.1
+      - uses: Swatinem/rust-cache@v2
+      - name: GTK dev libraries
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends libgtk-4-dev libadwaita-1-dev
+      - run: cargo test --workspace --all-targets --locked
+
+  windows-arm:
+    name: windows-11 (arm64)
+    runs-on: windows-11-arm
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.98.1
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --workspace --all-targets --locked

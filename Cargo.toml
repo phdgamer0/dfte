@@ -11,6 +11,7 @@ members = [
     "crates/platform-ffi",
     "crates/bench",
     "crates/cli",
+    "platform/linux",
     "tests/network-harness",
 ]
 

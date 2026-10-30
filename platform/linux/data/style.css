@@ -1,0 +1,68 @@
+/* DFTE desktop styling: the tokens of .claude/design/ui-spec.html mapped onto
+   libadwaita's named colours (spec rule: restyle toolkit defaults to the spec,
+   keep native behaviour). Dark values live in style-dark.css. */
+@define-color accent_bg_color #5b5bd6;
+@define-color accent_color #5b5bd6;
+@define-color accent_fg_color #ffffff;
+@define-color window_bg_color #f5f4f1;
+@define-color view_bg_color #f5f4f1;
+@define-color headerbar_bg_color #f5f4f1;
+@define-color sidebar_bg_color #f5f4f1;
+@define-color card_bg_color #ffffff;
+@define-color dialog_bg_color #ffffff;
+@define-color popover_bg_color #ffffff;
+@define-color window_fg_color #1b1c1f;
+@define-color view_fg_color #1b1c1f;
+@define-color dfte_surface_2 #eeede9;
+@define-color dfte_line #e3e1dc;
+@define-color dfte_text_2 #6b6d74;
+@define-color dfte_text_3 #9a9ca3;
+@define-color dfte_accent_soft #ecebfb;
+@define-color dfte_ok #2f8f6b;
+@define-color dfte_ok_soft #e4f3ec;
+@define-color dfte_danger #c8443c;
+@define-color dfte_danger_soft #f9e5e3;
+
+window, .dfte { font-family: "Inter", "Cantarell", sans-serif; font-size: 15px; }
+
+/* Sidebar: quiet rows, the selected one lifted onto a surface. */
+.dfte-nav row { min-height: 38px; border-radius: 10px; padding: 0 12px; color: @dfte_text_2; font-weight: 600; font-size: 13px; }
+.dfte-nav row:selected { background: @card_bg_color; color: @window_fg_color; }
+.dfte-nav .count { color: @dfte_text_3; font-weight: 400; font-size: 12px; }
+.dfte-me { padding: 12px; border-top: 1px solid @dfte_line; }
+
+.dfte-page { padding: 24px; }
+.dfte-title { font-size: 22px; font-weight: 600; letter-spacing: -0.01em; }
+.dfte-head { font-size: 17px; font-weight: 600; }
+.dfte-label { font-size: 13px; font-weight: 600; color: @dfte_text_2; }
+.dfte-caption { font-size: 12px; color: @dfte_text_3; }
+.dfte-mono { font-family: "JetBrains Mono", monospace; font-size: 12px; color: @dfte_text_3; }
+
+/* Cards: tonal surfaces, hairlines between rows, no shadows (the spec's one
+   shadow is for dialogs only, which libadwaita already draws). */
+.dfte-card { background: @card_bg_color; border-radius: 16px; }
+.dfte-card > row, .dfte-card .dfte-row { padding: 14px 16px; }
+.dfte-card > row + row { border-top: 1px solid @dfte_line; }
+.dfte-card list { background: transparent; }
+
+.dfte-drop { border: 2px dashed @dfte_line; border-radius: 16px; padding: 28px; background: @card_bg_color; }
+.dfte-drop.active { border-color: @accent_bg_color; background: @dfte_accent_soft; }
+
+.dfte-avatar { min-width: 40px; min-height: 40px; border-radius: 999px; background: @dfte_accent_soft; color: @accent_color; font-weight: 600; font-size: 13px; }
+
+/* Pill buttons, 48/36 px. */
+button.dfte-pill { min-height: 48px; padding: 0 22px; border-radius: 999px; font-weight: 600; }
+button.dfte-pill.small { min-height: 36px; padding: 0 16px; font-size: 13px; }
+button.dfte-pill.secondary { background: @dfte_surface_2; color: @window_fg_color; }
+button.dfte-pill.danger { background: @dfte_danger_soft; color: @dfte_danger; }
+
+.dfte-chip { min-height: 26px; padding: 0 10px; border-radius: 999px; font-size: 12px; font-weight: 600; background: @dfte_surface_2; color: @dfte_text_2; }
+.dfte-chip.ok { background: @dfte_ok_soft; color: @dfte_ok; }
+.dfte-chip.accent { background: @dfte_accent_soft; color: @accent_color; }
+
+/* Progress: 6 px bar on the soft accent track. */
+progressbar.dfte-bar trough { min-height: 6px; border-radius: 999px; background: @dfte_accent_soft; }
+progressbar.dfte-bar progress { min-height: 6px; border-radius: 999px; background: @accent_bg_color; }
+
+/* SAS code: six boxes, display digits. */
+.dfte-sas label { min-width: 44px; min-height: 58px; border-radius: 10px; background: @dfte_surface_2; font-size: 34px; font-weight: 600; font-feature-settings: "tnum"; }

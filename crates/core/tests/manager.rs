@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Yazdan Samari. All rights reserved except as granted by LICENSE.
+// SPDX-License-Identifier: PolyForm-Shield-1.0.0
+
 //! TransferManager end to end: two managers in one process over loopback TCP
 //! and QUIC (manual §22, §32).
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -355,7 +358,9 @@ async fn wait_bytes(m: &TransferManager, id: &str, bytes: u64) -> Transfer {
     }
 }
 
-/// A sender throttled to one chunk in flight on one stream, so tests can act mid-transfer.
+/// A sender on one stream with the smallest window, so tests can act mid-transfer.
+/// The send pool still holds `2 * streams + 1` = 3 chunks, so up to three are
+/// outstanding and the receiver can confirm them out of order.
 fn slow_sender(kind: TransportKind) -> Node {
     node(
         kind,
@@ -396,7 +401,11 @@ async fn pause_then_resume_continues_from_receiver_sidecar() {
     let staging = rx_node.root.join("app").join("staging");
     let held = staging_report(&staging);
     let held_bytes: u64 = held.iter().map(|s| s.files.iter().map(storage::ResumeFile::contiguous_offset).sum::<u64>()).sum();
-    assert!(held_bytes >= 12 * MIB, "receiver persisted only {held_bytes} bytes after 12 MiB were acked: {held:?}\nstaging: {:?}", list_dir(&staging));
+    // Resume starts at the contiguous prefix (§19). Chunks confirmed out of order
+    // (Windows CI: 0, 1 and 3 before 2) are acked but not in the prefix, so the
+    // prefix may trail the acked bytes by up to two chunks (the pool holds three).
+    let acked = mid.bytes_done;
+    assert!(held_bytes > 0 && held_bytes + 2 * 4 * MIB >= acked, "receiver persisted {held_bytes} bytes with {acked} acked: {held:?}\nstaging: {:?}", list_dir(&staging));
 
     tx_node.m.resume(&id).await.unwrap();
     let second = rx_node.incoming().await;

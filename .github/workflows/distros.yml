@@ -70,6 +70,10 @@ jobs:
           # Arch Linux publishes no official arm64 image.
           - distro: arch
             arch: arm64
+          # GitHub runs JavaScript actions (checkout) in Alpine containers on x64
+          # only; arm64 Alpine is the `alpine-arm` job below.
+          - distro: alpine
+            arch: arm64
     steps:
       # Plain sh: some images have no bash until this step installs it.
       - name: Packages
@@ -90,6 +94,32 @@ jobs:
         run: su builder -c 'cd "$0" && . "$HOME/.cargo/env" && cargo test --workspace --all-targets --locked' "$GITHUB_WORKSPACE"
       - name: Desktop app starts its engine-free paths
         run: su builder -c 'cd "$0" && . "$HOME/.cargo/env" && cargo run -q --locked -p dfte-gtk -- --version && cargo run -q --locked -p dfte-cli -- --version' "$GITHUB_WORKSPACE"
+
+  # Alpine on arm64, driven with `docker run` because actions can't run inside
+  # an arm64 Alpine container. Same steps as the matrix above.
+  alpine-arm:
+    name: alpine (arm64)
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test in alpine:latest
+        run: |
+          docker run --rm -v "$PWD:/src" alpine:latest sh -euc '
+            apk add --no-cache curl git bash build-base pkgconf gtk4.0-dev libadwaita-dev
+            adduser -D builder
+            cp -a /src /home/builder/dfte && chown -R builder /home/builder/dfte
+            su builder -c "
+              set -eu
+              curl -sSf https://sh.rustup.rs | sh -s -- -y -q --profile minimal --default-toolchain none
+              . \$HOME/.cargo/env
+              cd \$HOME/dfte
+              rustup toolchain install
+              cargo test --workspace --all-targets --locked
+              cargo run -q --locked -p dfte-gtk -- --version
+              cargo run -q --locked -p dfte-cli -- --version
+            "
+          '
 
   ubuntu-arm:
     name: ubuntu-24.04 (arm64)

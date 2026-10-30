@@ -1,6 +1,6 @@
 # Security policy
 
-DFTE moves files between devices over local Wi-Fi with no server in between, so a bug in it can expose someone's files or device to whoever is nearby. If you find one, please tell me privately first.
+DFTE moves files between devices over local Wi-Fi with no server in between, so a bug in it could expose someone's files or device to whoever is nearby. If you find one, please tell me privately first.
 
 ## Reporting a vulnerability
 
@@ -12,9 +12,15 @@ A useful report says which app and version or commit you tested, what the two de
 
 ## What happens next
 
-DFTE is maintained by one person in their own time. I'll try to reply within a week to say I've seen the report, and to keep you updated while I work on a fix. Some fixes will take longer than others, and I'll tell you if that happens. Once a fix is released, I'll publish an advisory and credit you by name unless you'd rather not be named. There is no bug bounty.
+DFTE is maintained by one person in their own time. I'll try to reply within a week to say I've seen the report, and to keep you updated while I work on a fix. Some fixes will take longer than others, and I'll tell you if that happens. Once a fix is released, I plan to publish an advisory and credit you by name unless you'd rather not be named. There is no bug bounty and no payment for reports.
 
 Please give me a reasonable chance to release a fix before you publish anything. If we disagree about timing, let's talk about it in the advisory.
+
+## Good-faith research
+
+If you look for security problems in DFTE in good faith and follow this policy, I won't take legal action against you for that research. This applies only if you test only on devices and networks you own or have permission to use, avoid reading, changing or deleting other people's data, avoid disrupting other people, stop and report as soon as you find a problem, and give me a reasonable chance to fix it before publishing.
+
+This only covers claims I could bring myself. It can't stop a device maker, a network owner, an app store or the authorities from acting, and it doesn't make legal anything that the law forbids.
 
 ## Supported versions
 

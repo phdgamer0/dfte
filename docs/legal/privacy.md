@@ -8,13 +8,13 @@ DFTE is made by Yazdan Samari ("I" below). The source code is at https://github.
 
 ## The short version
 
-DFTE moves files from one of your devices to another device near you, over your local Wi-Fi network or a direct Wi-Fi link between the two devices. It never connects to the internet. There is no DFTE server, no account, no analytics, no ads and no crash reporting. I don't receive any information about you or your files.
+DFTE moves files from one of your devices to another device near you, over your local Wi-Fi network or a direct Wi-Fi link between the two devices. It has no code that connects to the internet. There is no DFTE server, no account, no analytics, no ads and no crash reporting. I don't receive any information about you or your files.
 
 ## What I collect
 
-Nothing. The apps have no code that sends data to me or to anyone else besides the device you are transferring with. No server exists that could receive it.
+Nothing through the apps. They have no code that sends data to me or to anyone else besides the device you are transferring with. No server exists that could receive it.
 
-If you open an issue or a security advisory on GitHub, what you write there is handled by GitHub under its own privacy policy. Issues are public, so don't paste anything private into one.
+If you open an issue or a security advisory on GitHub, what you write there is handled by GitHub under its own privacy policy. Issues are public, so don't paste anything private into one. I see your GitHub username and what you write (see "Data protection law" below).
 
 ## What the app keeps on your device
 
@@ -28,7 +28,7 @@ Files you receive. While a transfer is running, incoming data is written to the 
 
 Files you send. To avoid reading a large file twice when you send it again or resume, DFTE keeps a cache of each sent file's full path, size, modification times and content hashes (not its contents). On Linux both apps use `~/.cache/dfte/hashes` (or `$XDG_CACHE_HOME/dfte/hashes`), and only files of 4 MiB or more are listed. On Android it is in the app's own storage. On Android, files you pick from other apps are read where they are and are not copied.
 
-Logs. DFTE writes diagnostic messages so problems can be tracked down. On Linux they go to the terminal only and are not saved to a file. On Android they go to the system log. Other apps can't read it, though a computer connected with USB debugging can. Logs can include device names, short fingerprints, file names, sizes and error messages. They never include encryption keys or the contents of your files.
+Logs. DFTE writes diagnostic messages so problems can be tracked down. On Linux they go to the terminal only and are not saved to a file. On Android they go to the system log. Ordinary apps can't read it, though a computer connected with USB debugging can. Logs can include device names, short fingerprints, file names, sizes and error messages. DFTE is written so that they don't include encryption keys or the contents of your files.
 
 To remove everything: on Android, uninstall the app (files already moved to Downloads/DFTE stay where they are). On Linux, delete the folders `~/.local/share/dfte` and `~/.cache/dfte`. If you delete the identity key, DFTE makes a new one, and devices that trusted you will have to check your code again.
 
@@ -38,25 +38,25 @@ To be found, DFTE announces itself on the local network. On Android this happens
 
 - your device name (on Android, the name set in system settings, or the phone model if none is set; on Linux, the computer's hostname, or `DFTE_DEVICE_NAME` if you set it)
 - your device's public identity key, from which the fingerprint shown in the app is computed
-- the port DFTE is listening on, and the time on your device's clock
+- the port DFTE is listening on, the time on your device's clock, and a random number that changes with each announcement
 
 Announcements are signed but not encrypted. They are sent to a local multicast address that routers don't forward beyond your network, and to devices on your network that have answered. Anyone on the same Wi-Fi network or Wi-Fi Direct group who runs DFTE, or who captures network traffic, can see that your device is running DFTE and what it is called. If that matters to you, change your device name or only open DFTE on networks you trust.
 
 When you use Wi-Fi Direct on Android, nearby devices can also see your phone's Wi-Fi Direct name. That name is set by Android, not by DFTE.
 
-Everything after the announcement is encrypted, including file names and sizes. The device you send to gets the files, their names, sizes and modification times. Someone listening on the radio can still tell that two devices are exchanging data and roughly how much, but not what it is.
+The connection after the announcement is encrypted, including file names and sizes. The device you send to gets the files, their names, sizes and modification times. Someone listening on the radio can still tell that two devices are exchanging data and roughly how much. The encryption is there to stop them from reading what it is.
 
 ## Android permissions
 
 Android asks you for some of these when you first use the feature that needs them. The others are granted at install time.
 
-Internet (`INTERNET`). Android requires this for any network connection, including ones that stay inside your home Wi-Fi. DFTE uses it to talk to the other device over your local network or Wi-Fi Direct link. It has no code that contacts servers on the internet, and its announcements are only sent to private and link-local addresses.
+Internet (`INTERNET`). Android requires this for any network connection, including ones that stay inside your home Wi-Fi. DFTE uses it to talk to the other device over your local network or Wi-Fi Direct link. It has no code that contacts servers on the internet, and it only sends its announcements to a local multicast address and to private or link-local addresses.
 
 Network and Wi-Fi state (`ACCESS_NETWORK_STATE`, `ACCESS_WIFI_STATE`, `CHANGE_WIFI_STATE`). To check whether Wi-Fi is on, find this device's address on the local network, and start Wi-Fi Direct.
 
 Wi-Fi multicast (`CHANGE_WIFI_MULTICAST_STATE`). Android drops multicast packets by default to save battery. DFTE turns multicast reception on while it is looking for devices, so it can hear their announcements.
 
-Precise location (`ACCESS_FINE_LOCATION`), Android 12 and older only. Android requires this permission before an app can use Wi-Fi Direct, because Wi-Fi scan results could in theory reveal where you are. DFTE never reads your location. On these versions Android may also ask you to turn on location services before Wi-Fi Direct can find devices.
+Precise location (`ACCESS_FINE_LOCATION`), Android 12 and older only. Android requires this permission before an app can use Wi-Fi Direct, because Wi-Fi scan results could in theory reveal where you are. DFTE has no code that reads your location. On these versions Android may also ask you to turn on location services before Wi-Fi Direct can find devices.
 
 Nearby Wi-Fi devices (`NEARBY_WIFI_DEVICES`), Android 13 and newer. This replaces the location permission for Wi-Fi Direct. DFTE declares it with Android's "never for location" flag, which tells the system the app doesn't use it to work out your location.
 
@@ -72,9 +72,19 @@ DFTE also shows up in the Android share menu. It only sees files you choose to s
 
 DFTE doesn't ask for access to your camera, microphone, contacts, accounts, photos library or call logs. App backup is turned off, so DFTE's data is not copied to your Google account.
 
+## Data protection law
+
+This section is for the Turkish Personal Data Protection Law (KVKK, Law No. 6698) and the EU General Data Protection Regulation (GDPR).
+
+I don't receive or process personal data from the DFTE apps. The data described above stays on your device and under your control. You can delete it at any time as explained in "What the app keeps on your device". I am not the data controller for it, because I never have it and don't decide what happens to it. Files you send are under the control of you and the person you send them to.
+
+The only personal data I handle is what you send me yourself, for example your GitHub username and message when you open an issue or a security report. I use it to answer you and to fix the problem you report. The legal basis is my legitimate interest in answering questions and fixing DFTE (KVKK article 5(2)(f), GDPR article 6(1)(f)). It stays on GitHub for as long as the issue or report exists.
+
+You have rights over your personal data, including to ask what I hold about you, to have it corrected or deleted, and to object. Because the apps send me nothing, in most cases I will hold nothing about you. To use these rights, contact me as described below. You can also complain to a data protection authority: in Türkiye the Personal Data Protection Authority (Kişisel Verileri Koruma Kurumu), and in the EU the authority of your country.
+
 ## Children
 
-DFTE is not aimed at children. It doesn't collect anything from anyone, children included.
+DFTE is not aimed at children. The apps don't send me anything about anyone, children included.
 
 ## Changes to this policy
 

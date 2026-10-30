@@ -1,6 +1,6 @@
 # Third-party notices
 
-DFTE is copyright (c) 2026 Yazdan Samari and is released under the PolyForm Shield License 1.0.0 (see [LICENSE](../../LICENSE)). It is built on code, libraries and fonts written by other people. Each of those keeps its own license, listed below. Nothing in this file changes the license of DFTE or of any of these components.
+DFTE is copyright (c) 2026 Yazdan Samari and is released under the PolyForm Shield License 1.0.0 (see [LICENSE](../../LICENSE)). It is built on code, libraries and fonts written by other people. Each of those keeps its own license, listed below, and those licenses govern their use. Nothing in this file changes the license of DFTE or of any of these components. Their authors have no part in DFTE and are not responsible for it.
 
 ## How this list was made
 
@@ -25,7 +25,7 @@ Most of these licenses (MIT, BSD, ISC, Zlib, Apache-2.0) ask that a binary distr
 A few entries need a note:
 
 - `ring` is under Apache-2.0 and ISC together, not a choice between them. Parts of it come from BoringSSL and OpenSSL. Both licenses apply.
-- The `uniffi` crates (MPL-2.0) are used unmodified. MPL-2.0 covers changes to those files only, and their source is at https://github.com/mozilla/uniffi-rs. If we ever patch them, the patched files have to be published under MPL-2.0.
+- The `uniffi` crates (MPL-2.0) are used unmodified. MPL-2.0 covers changes to those files only, and their source is at https://github.com/mozilla/uniffi-rs. If DFTE ever patches them, the patched files have to be published under MPL-2.0.
 - The Android list includes `uniffi_bindgen`, `askama`, `toml`, `goblin` and similar crates. They are there because `uniffi` turns on its `cargo-metadata` feature by default, which makes the binding generator a normal dependency. Most of that code is probably removed by the linker, but the list includes it to be safe.
 - `curve25519-dalek`, `ed25519-dalek` and `subtle` are BSD-3-Clause. That license forbids using the authors' names to promote DFTE without permission.
 - For crates offered under a choice of licenses ("A OR B"), DFTE may use any one of them.
